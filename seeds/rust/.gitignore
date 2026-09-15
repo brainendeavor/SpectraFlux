@@ -1,0 +1,5 @@
+/target
+/dist
+*.wasm
+*.sha256
+.DS_Store

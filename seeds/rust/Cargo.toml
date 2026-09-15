@@ -1,0 +1,17 @@
+[package]
+name = "fluxcell-seed-rs"
+version = "0.1.0"
+edition = "2024"
+description = "Canonical barebones Rust starter seed for SpectraFlux WebAssembly Fluxcells"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+fluxcell-sdk = { path = "../../sdks/rust" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[build-dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

@@ -1,0 +1,10 @@
+/target/
+target/
+**/*.rs.bk
+*.rej
+*.orig
+.DS_Store
+node_modules/
+.env
+.env.*
+!.env.example

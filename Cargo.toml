@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "runtime",
+    "sdks/rust",
+    "tools/cli",
+    "fluxcells/rust/magic-link",
+    "fluxcells/rust/webhook",
+    "seeds/rust",
+    "examples/rust/mailer",
+]
+resolver = "2"

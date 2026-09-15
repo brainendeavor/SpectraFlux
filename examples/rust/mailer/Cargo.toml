@@ -1,0 +1,17 @@
+[package]
+name = "fluxcell-invoice-mailer"
+version = "0.1.0"
+edition = "2024"
+description = "Canonical reference Fluxcell: asynchronous invoice mailer and webhook dispatcher"
+license = "MIT"
+
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[build-dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
