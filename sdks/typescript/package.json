@@ -14,7 +14,8 @@
   },
   "scripts": {
     "build": "node ./bin/build.mjs",
-    "test": "node ./bin/verify-abi.mjs",
+    "test": "bun test",
+    "verify": "node ./bin/verify-abi.mjs",
     "bootstrap": "node ./bin/bootstrap.mjs"
   },
   "devDependencies": {
