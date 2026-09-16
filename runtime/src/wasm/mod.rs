@@ -147,9 +147,11 @@ struct RegisteredFluxcell {
 
 struct HostState {
     limits: StoreLimits,
+    storage: Option<Arc<dyn crate::storage::FluxStorage>>,
     db_registry: Option<Arc<crate::db::DatabaseRegistry>>,
     active_transactions: HashMap<u64, Box<dyn crate::db::FluxTx>>,
     next_tx_id: u64,
+    current_command_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -281,9 +283,11 @@ impl WasmHost {
             .build();
         let host_state = HostState {
             limits,
+            storage: self.storage.clone(),
             db_registry: self.db_registry.clone(),
             active_transactions: HashMap::new(),
             next_tx_id: 1,
+            current_command_id: None,
         };
         let mut store = Store::new(&self.engine, host_state);
         store.limiter(|s| &mut s.limits);
@@ -559,9 +563,11 @@ impl WasmHost {
                         .build();
                     let host_state = HostState {
                         limits,
+                        storage: self.storage.clone(),
                         db_registry: self.db_registry.clone(),
                         active_transactions: HashMap::new(),
                         next_tx_id: 1,
+                        current_command_id: None,
                     };
                     let mut store = Store::new(&self.engine, host_state);
                     store.limiter(|s| &mut s.limits);
@@ -579,6 +585,16 @@ impl WasmHost {
                 }
             }
         };
+
+        // Extract command/event id from input for checkpoint scoping
+        let cmd_id = input
+            .get("eventId")
+            .or_else(|| input.get("event-id"))
+            .or_else(|| input.get("id"))
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+        store.data_mut().current_command_id = cmd_id;
+        store.data_mut().storage = self.storage.clone();
 
         // Reset epoch timeout ticks for this invocation
         let deadline_ticks = (timeout_ms / self.epoch_tick_interval_ms.max(1)).max(10);
@@ -830,6 +846,8 @@ impl WasmHost {
     fn create_linker(&self) -> Result<Linker<HostState>> {
         let mut linker = Linker::new(&self.engine);
         self.bind_host_db(&mut linker)?;
+        self.bind_host_checkpoint(&mut linker)?;
+        self.bind_host_kv(&mut linker)?;
         Ok(linker)
     }
 
@@ -988,6 +1006,158 @@ impl WasmHost {
                         Err(e) => serde_json::json!({ "err": e.to_string() }),
                     };
                     write_string_to_caller(&mut caller, &resp.to_string()).unwrap_or(0)
+                },
+            )
+            .map_err(|e| anyhow!("{:#}", e))?;
+
+        Ok(())
+    }
+
+    fn bind_host_checkpoint(&self, linker: &mut Linker<HostState>) -> Result<()> {
+        linker
+            .func_wrap(
+                "checkpoint",
+                "get",
+                |mut caller: Caller<'_, HostState>, step_ptr: u32, step_len: u32| -> u64 {
+                    let res: Result<Option<String>> = (|| {
+                        let step_name = read_string_from_caller(&mut caller, step_ptr, step_len)?;
+                        let storage = caller
+                            .data()
+                            .storage
+                            .clone()
+                            .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
+                        let cmd_id = caller
+                            .data()
+                            .current_command_id
+                            .clone()
+                            .unwrap_or_else(|| "default".to_string());
+                        let key = format!("chk:{}:{}", cmd_id, step_name);
+                        run_async(storage.get(&key))
+                    })();
+
+                    match res {
+                        Ok(Some(cached_val)) => {
+                            write_string_to_caller(&mut caller, &cached_val).unwrap_or(0)
+                        }
+                        _ => 0,
+                    }
+                },
+            )
+            .map_err(|e| anyhow!("{:#}", e))?;
+
+        linker
+            .func_wrap(
+                "checkpoint",
+                "save",
+                |mut caller: Caller<'_, HostState>,
+                 step_ptr: u32,
+                 step_len: u32,
+                 val_ptr: u32,
+                 val_len: u32,
+                 ttl_seconds: u64|
+                 -> u32 {
+                    let res: Result<bool> = (|| {
+                        let step_name = read_string_from_caller(&mut caller, step_ptr, step_len)?;
+                        let val_json = read_string_from_caller(&mut caller, val_ptr, val_len)?;
+                        let storage = caller
+                            .data()
+                            .storage
+                            .clone()
+                            .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
+                        let cmd_id = caller
+                            .data()
+                            .current_command_id
+                            .clone()
+                            .unwrap_or_else(|| "default".to_string());
+                        let key = format!("chk:{}:{}", cmd_id, step_name);
+                        let ttl = if ttl_seconds == 0 { 86_400 } else { ttl_seconds };
+                        run_async(storage.set(&key, &val_json, ttl))
+                    })();
+
+                    match res {
+                        Ok(true) => 1,
+                        _ => 0,
+                    }
+                },
+            )
+            .map_err(|e| anyhow!("{:#}", e))?;
+
+        Ok(())
+    }
+
+    fn bind_host_kv(&self, linker: &mut Linker<HostState>) -> Result<()> {
+        linker
+            .func_wrap(
+                "kv_store",
+                "get",
+                |mut caller: Caller<'_, HostState>, key_ptr: u32, key_len: u32| -> u64 {
+                    let res: Result<Option<String>> = (|| {
+                        let key = read_string_from_caller(&mut caller, key_ptr, key_len)?;
+                        let storage = caller
+                            .data()
+                            .storage
+                            .clone()
+                            .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
+                        run_async(storage.get(&key))
+                    })();
+
+                    match res {
+                        Ok(Some(val)) => write_string_to_caller(&mut caller, &val).unwrap_or(0),
+                        _ => 0,
+                    }
+                },
+            )
+            .map_err(|e| anyhow!("{:#}", e))?;
+
+        linker
+            .func_wrap(
+                "kv_store",
+                "set",
+                |mut caller: Caller<'_, HostState>,
+                 key_ptr: u32,
+                 key_len: u32,
+                 val_ptr: u32,
+                 val_len: u32,
+                 ttl_seconds: u64|
+                 -> u32 {
+                    let res: Result<bool> = (|| {
+                        let key = read_string_from_caller(&mut caller, key_ptr, key_len)?;
+                        let val = read_string_from_caller(&mut caller, val_ptr, val_len)?;
+                        let storage = caller
+                            .data()
+                            .storage
+                            .clone()
+                            .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
+                        run_async(storage.set(&key, &val, ttl_seconds))
+                    })();
+
+                    match res {
+                        Ok(true) => 1,
+                        _ => 0,
+                    }
+                },
+            )
+            .map_err(|e| anyhow!("{:#}", e))?;
+
+        linker
+            .func_wrap(
+                "kv_store",
+                "delete",
+                |mut caller: Caller<'_, HostState>, key_ptr: u32, key_len: u32| -> u32 {
+                    let res: Result<bool> = (|| {
+                        let key = read_string_from_caller(&mut caller, key_ptr, key_len)?;
+                        let storage = caller
+                            .data()
+                            .storage
+                            .clone()
+                            .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
+                        run_async(storage.delete(&key))
+                    })();
+
+                    match res {
+                        Ok(true) => 1,
+                        _ => 0,
+                    }
                 },
             )
             .map_err(|e| anyhow!("{:#}", e))?;
@@ -1598,5 +1768,77 @@ mod tests {
         assert!(result.is_err());
         // Must complete quickly according to route timeout (25ms), well before the 10s default
         assert!(elapsed < Duration::from_millis(500), "Route timeout did not terminate in time: {:?}", elapsed);
+    }
+
+    #[test]
+    fn test_checkpoint_step_memoization() {
+        use crate::storage::FluxStorage;
+        let wat_checkpoint = r#"
+        (module
+          (import "checkpoint" "get" (func $chk_get (param i32 i32) (result i64)))
+          (import "checkpoint" "save" (func $chk_save (param i32 i32 i32 i32 i64) (result i32)))
+          (memory (export "memory") 1)
+          (data (i32.const 1024) "step1")
+          (data (i32.const 1040) "{\"status\":\"first_run\",\"val\":42}")
+          (func (export "allocate") (param i32) (result i32) i32.const 2048)
+          (func (export "deallocate") (param i32 i32))
+          (func (export "handle_event") (param i32 i32) (result i64)
+            (local $cached i64)
+            ;; Check if step1 is already cached
+            (local.set $cached (call $chk_get (i32.const 1024) (i32.const 5)))
+            (if (i64.eqz (local.get $cached))
+              (then
+                ;; Not cached: save result and return first_run
+                (drop (call $chk_save (i32.const 1024) (i32.const 5) (i32.const 1040) (i32.const 31) (i64.const 86400)))
+                ;; (1040 << 32) | 31 = 4466765987871
+                (return (i64.const 4466765987871))
+              )
+            )
+            ;; Cached: return cached pointer
+            (local.get $cached)
+          )
+        )
+        "#;
+
+        #[cfg(feature = "kevy")]
+        let storage = Arc::new(crate::storage::KevyStorage::new_in_memory().unwrap());
+        #[cfg(not(feature = "kevy"))]
+        let storage = Arc::new(crate::storage::InMemoryStorage::new());
+
+        let host = WasmHost::new(5, Some(storage.clone())).unwrap();
+        host.register_wat("checkpoint-cell", wat_checkpoint, FluxcellWasmConfig::default()).unwrap();
+
+        let event_payload_1 = serde_json::json!({
+            "id": "cmd-001-uuidv7",
+            "topic": "orders.create",
+            "payload": { "amount": 500 }
+        });
+
+        // First run: executes step, saves checkpoint
+        let res1 = host.invoke_event("checkpoint-cell", &event_payload_1).unwrap();
+        assert_eq!(res1["status"], "first_run");
+        assert_eq!(res1["val"], 42);
+
+        // Verify checkpoint was written to storage with command scoping
+        let cached = run_async(storage.get("chk:cmd-001-uuidv7:step1")).unwrap();
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap(), "{\"status\":\"first_run\",\"val\":42}");
+
+        // Modify storage directly to simulate a mutated cache to prove second run is memoized
+        run_async(storage.set("chk:cmd-001-uuidv7:step1", "{\"status\":\"from_cache\",\"cached\":true}", 86400)).unwrap();
+
+        // Second run with SAME command ID: returns from cache!
+        let res2 = host.invoke_event("checkpoint-cell", &event_payload_1).unwrap();
+        assert_eq!(res2["status"], "from_cache");
+        assert_eq!(res2["cached"], true);
+
+        // Third run with DIFFERENT command ID: executes anew!
+        let event_payload_2 = serde_json::json!({
+            "id": "cmd-002-uuidv7",
+            "topic": "orders.create",
+            "payload": { "amount": 500 }
+        });
+        let res3 = host.invoke_event("checkpoint-cell", &event_payload_2).unwrap();
+        assert_eq!(res3["status"], "first_run");
     }
 }

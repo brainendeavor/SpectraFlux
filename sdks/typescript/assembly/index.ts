@@ -8,4 +8,6 @@ export * from "./hlc";
 export * from "./telemetry";
 export * from "./dedup";
 export * from "./causal";
+export * from "./checkpoint";
 export * from "./abi";
+

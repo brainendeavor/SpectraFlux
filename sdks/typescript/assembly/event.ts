@@ -1,4 +1,5 @@
 // AssemblyScript SDK: Event Domain Models
+import { getStep, saveStep, step } from "./checkpoint";
 
 export enum EventVerdict {
   Ack = 0,
@@ -67,4 +68,28 @@ export class EventContext {
 
     return new EventContext(eventId, hlc, topic, payload);
   }
+
+  /**
+   * Executes a durable, idempotent step within the context of this event.
+   * If the step has already executed for this command/event ID,
+   * returns the cached result immediately without invoking `action`.
+   */
+  step(stepName: string, action: () => string, ttlSeconds: u64 = 86400): string {
+    return step(stepName, action, ttlSeconds);
+  }
+
+  /**
+   * Retrieves the cached result of a previously executed step for this event.
+   */
+  getStep(stepName: string): string | null {
+    return getStep(stepName);
+  }
+
+  /**
+   * Manually memoizes a step result for this event.
+   */
+  saveStep(stepName: string, resultJson: string, ttlSeconds: u64 = 86400): bool {
+    return saveStep(stepName, resultJson, ttlSeconds);
+  }
 }
+

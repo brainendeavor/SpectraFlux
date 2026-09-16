@@ -3,6 +3,8 @@
 import { HttpRequest, HttpResponse, RouteMeta } from "./http";
 import { EventContext } from "./event";
 import { FluxcellMetadata } from "./metadata";
+import { step } from "./checkpoint";
+
 
 export class Fluxcell {
   metadata(): FluxcellMetadata {
@@ -107,3 +109,31 @@ export function handle_event(ptr: u32, len: u32): u64 {
   const verdict = cell.handleEvent(event);
   return packString(verdict);
 }
+
+let testInvoked: i32 = 0;
+let testReturnVal: string = "";
+
+function stepActionOne(): string {
+  testInvoked++;
+  return testReturnVal;
+}
+
+function stepActionTwo(): string {
+  testInvoked++;
+  return "unexpected";
+}
+
+// Verification export for step checkpoint memoization
+export function test_checkpoint_step(stepPtr: u32, stepLen: u32, valPtr: u32, valLen: u32): u64 {
+  const stepName = unpackString(stepPtr, stepLen);
+  testReturnVal = unpackString(valPtr, valLen);
+  testInvoked = 0;
+
+  const res = step(stepName, stepActionOne);
+  const res2 = step(stepName, stepActionTwo);
+
+  const out = '{"result":' + res + ',"cached":' + res2 + ',"invocations":' + testInvoked.toString() + '}';
+  return packString(out);
+}
+
+

@@ -55,6 +55,79 @@ impl EventContext {
     pub fn json<T: DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
         serde_json::from_slice(&self.payload)
     }
+
+    /// Executes a durable, idempotent step.
+    /// If the step has already executed for this command/event ID,
+    /// returns the cached result immediately without invoking `action`.
+    pub fn step<F, T>(&self, step_name: &str, action: F) -> Result<T, String>
+    where
+        F: FnOnce() -> Result<T, String>,
+        T: Serialize + DeserializeOwned,
+    {
+        if let Some(cached_json) = checkpoint::get_step(step_name) {
+            if let Ok(val) = serde_json::from_str::<T>(&cached_json) {
+                return Ok(val);
+            }
+        }
+
+        let res = action()?;
+        if let Ok(json_str) = serde_json::to_string(&res) {
+            checkpoint::save_step(step_name, &json_str, 86_400);
+        }
+        Ok(res)
+    }
+}
+
+pub mod checkpoint {
+    #[cfg(target_arch = "wasm32")]
+    #[link(wasm_import_module = "checkpoint")]
+    unsafe extern "C" {
+        safe fn get(step_ptr: u32, step_len: u32) -> u64;
+        safe fn save(step_ptr: u32, step_len: u32, val_ptr: u32, val_len: u32, ttl_seconds: u64) -> u32;
+    }
+
+    /// Retrieves cached step result if present
+    pub fn get_step(step_name: &str) -> Option<String> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let bytes = step_name.as_bytes();
+            let packed = get(bytes.as_ptr() as usize as u32, bytes.len() as u32);
+            if packed == 0 {
+                return None;
+            }
+            let ptr = (packed >> 32) as usize;
+            let len = (packed & 0xFFFF_FFFF) as usize;
+            let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
+            String::from_utf8(slice.to_vec()).ok()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = step_name;
+            None
+        }
+    }
+
+    /// Saves step result with optional TTL in seconds
+    pub fn save_step(step_name: &str, result_json: &str, ttl_seconds: u64) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let s_bytes = step_name.as_bytes();
+            let r_bytes = result_json.as_bytes();
+            let res = save(
+                s_bytes.as_ptr() as usize as u32,
+                s_bytes.len() as u32,
+                r_bytes.as_ptr() as usize as u32,
+                r_bytes.len() as u32,
+                ttl_seconds,
+            );
+            res != 0
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = (step_name, result_json, ttl_seconds);
+            true
+        }
+    }
 }
 
 /// The outcome verdict returned after processing an event.

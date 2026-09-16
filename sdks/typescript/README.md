@@ -218,6 +218,33 @@ Governs message acknowledgment:
 
 ---
 
+### 80/20 Durable Step Checkpoints (`ctx.step`, `checkpoint`)
+
+SpectraFlux provides an 80/20 durable step checkpoint primitive. If an event or command fails midway and retries, completed external side effects (e.g. Stripe charges, external Webhooks, third-party reservation APIs) are bypassed by returning the cached output from the chassis host storage:
+
+```typescript
+import { EventContext, EventVerdict, step } from "@spectraflux/sdk";
+
+export class OrderCell extends Fluxcell {
+  handleEvent(ctx: EventContext): string {
+    // 1. Durable idempotent side effect
+    const charge = ctx.step("stripe_charge", (): string => {
+      // Executed ONLY ONCE per command UUIDv7
+      return '{"status":"charged","charge_id":"ch_987"}';
+    });
+
+    // 2. Subsequent operations
+    return '{"status":"success","charge":' + charge + '}';
+  }
+}
+```
+
+* **`ctx.step(stepName, action, ttlSeconds = 86400)`**: Returns cached result if already completed, otherwise runs `action` and persists to host storage scoped by monotonic UUIDv7 Command ID (`chk:<cmd_id>:<step_name>`).
+* **`getStep(stepName)`**: Directly reads cached checkpoint if present.
+* **`saveStep(stepName, resultJson, ttlSeconds)`**: Manually stores step output.
+
+---
+
 ### Host Database Integration (`Database`, `FluxTx`)
 
 Fluxcells communicate with host database connection pools using the host-injected `host_db` interface.

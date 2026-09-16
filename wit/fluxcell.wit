@@ -60,6 +60,16 @@ world fluxcell-guest {
         delete: func(key: string) -> bool;
     };
 
+    import checkpoint: interface {
+        /// Checks if a step has already executed for the current command/event.
+        /// Returns cached JSON output if completed, or none if not yet executed.
+        get: func(step-name: string) -> option<string>;
+
+        /// Saves the output of a completed step for the current command/event.
+        /// ttl-seconds specifies time before expiration (0 defaults to 86400 / 24 hours).
+        save: func(step-name: string, result-json: string, ttl-seconds: u64) -> bool;
+    };
+
     import host-broker: interface {
         publish: func(topic: string, payload-json: string) -> bool;
     };
