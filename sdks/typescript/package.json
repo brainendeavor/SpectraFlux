@@ -1,0 +1,23 @@
+{
+  "name": "@spectraflux/sdk",
+  "version": "0.1.0",
+  "description": "Official AssemblyScript Guest SDK & Tooling for SpectraFlux WebAssembly Fluxcells",
+  "type": "module",
+  "main": "assembly/index.ts",
+  "types": "assembly/index.ts",
+  "ascMain": "assembly/index.ts",
+  "bin": {
+    "fluxcell-bootstrap": "./bin/bootstrap.mjs",
+    "fluxcell-build": "./bin/build.mjs",
+    "fluxcell-deploy": "./bin/deploy.mjs",
+    "fluxcell-verify": "./bin/verify-abi.mjs"
+  },
+  "scripts": {
+    "build": "node ./bin/build.mjs",
+    "test": "node ./bin/verify-abi.mjs",
+    "bootstrap": "node ./bin/bootstrap.mjs"
+  },
+  "devDependencies": {
+    "assemblyscript": "^0.27.34"
+  }
+}
