@@ -21,6 +21,9 @@ enum Commands {
         /// Target directory path (defaults to ./<name>)
         #[arg(short, long)]
         path: Option<PathBuf>,
+        /// Target language: 'rust' (default) or 'typescript' / 'ts'
+        #[arg(short, long, default_value = "rust")]
+        lang: String,
         /// Starter template: 'minimal' (default) or 'mailer'
         #[arg(short, long, default_value = "minimal")]
         template: String,
@@ -30,6 +33,9 @@ enum Commands {
         /// Name of the fluxcell (defaults to current directory name)
         #[arg(short, long)]
         name: Option<String>,
+        /// Target language: 'rust' (default) or 'typescript' / 'ts'
+        #[arg(short, long, default_value = "rust")]
+        lang: String,
         /// Starter template: 'minimal' (default) or 'mailer'
         #[arg(short, long, default_value = "minimal")]
         template: String,
@@ -87,16 +93,34 @@ enum Commands {
     },
 }
 
+// Canonical Rust Seed Files (Single Source of Truth)
+const RUST_SEED_CARGO_TOML: &str = include_str!("../../../seeds/rust/Cargo.toml");
+const RUST_SEED_BUILD_RS: &str = include_str!("../../../seeds/rust/build.rs");
+const RUST_SEED_BUILD_SH: &str = include_str!("../../../seeds/rust/build.sh");
+const RUST_SEED_LIB_RS: &str = include_str!("../../../seeds/rust/src/lib.rs");
+const RUST_SEED_WIT: &str = include_str!("../../../seeds/rust/wit/fluxcell.wit");
+const RUST_SEED_GITIGNORE: &str = include_str!("../../../seeds/rust/.gitignore");
+const RUST_MAILER_LIB_RS: &str = include_str!("../../../examples/rust/mailer/src/lib.rs");
+
+// Canonical TypeScript Seed Files (Single Source of Truth)
+const TS_SEED_PACKAGE_JSON: &str = include_str!("../../../seeds/typescript/package.json");
+const TS_SEED_ASCONFIG_JSON: &str = include_str!("../../../seeds/typescript/asconfig.json");
+const TS_SEED_TSCONFIG_JSON: &str = include_str!("../../../seeds/typescript/tsconfig.json");
+const TS_SEED_BUILD_SH: &str = include_str!("../../../seeds/typescript/build.sh");
+const TS_SEED_INDEX_TS: &str = include_str!("../../../seeds/typescript/assembly/index.ts");
+const TS_SEED_README_MD: &str = include_str!("../../../seeds/typescript/README.md");
+const TS_SEED_GITIGNORE: &str = include_str!("../../../seeds/typescript/.gitignore");
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::New { name, path, template } => {
+        Commands::New { name, path, lang, template } => {
             let target_dir = path.unwrap_or_else(|| PathBuf::from(&name));
-            scaffold_fluxcell(&name, &target_dir, &template)?;
+            scaffold_fluxcell(&name, &target_dir, &template, &lang)?;
         }
-        Commands::Init { name, template } => {
+        Commands::Init { name, lang, template } => {
             let current_dir = std::env::current_dir()?;
             let resolved_name = name.unwrap_or_else(|| {
                 current_dir
@@ -105,7 +129,7 @@ async fn main() -> Result<()> {
                     .unwrap_or("my-fluxcell")
                     .to_string()
             });
-            scaffold_fluxcell(&resolved_name, &current_dir, &template)?;
+            scaffold_fluxcell(&resolved_name, &current_dir, &template, &lang)?;
         }
         Commands::Build { path, release } => {
             run_build(path.as_deref(), release)?;
@@ -145,133 +169,40 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn scaffold_fluxcell(name: &str, target_dir: &Path, template: &str) -> Result<()> {
-    println!("⚡ Scaffolding new Fluxcell '{name}' at {}...", target_dir.display());
+fn scaffold_fluxcell(name: &str, target_dir: &Path, template: &str, lang: &str) -> Result<()> {
+    if lang.eq_ignore_ascii_case("ts") || lang.eq_ignore_ascii_case("typescript") {
+        scaffold_ts_fluxcell(name, target_dir, template)
+    } else {
+        scaffold_rust_fluxcell(name, target_dir, template)
+    }
+}
+
+fn scaffold_rust_fluxcell(name: &str, target_dir: &Path, template: &str) -> Result<()> {
+    println!("⚡ Scaffolding new Rust Fluxcell '{name}' from canonical seed at {}...", target_dir.display());
 
     fs::create_dir_all(target_dir.join("src"))?;
     fs::create_dir_all(target_dir.join("wit"))?;
     fs::create_dir_all(target_dir.join(".github/workflows"))?;
 
-    // Cargo.toml
-    let cargo_toml = format!(
-r#"[package]
-name = "{name}"
-version = "0.1.0"
-edition = "2024"
-description = "{name} Fluxcell for SpectraGQL"
-license = "MIT"
-
-[lib]
-crate-type = ["cdylib", "rlib"]
-
-[dependencies]
-serde = {{ version = "1.0", features = ["derive"] }}
-serde_json = "1.0"
-
-[build-dependencies]
-chrono = {{ version = "0.4", default-features = false, features = ["clock"] }}
-"#);
+    let cargo_toml = RUST_SEED_CARGO_TOML
+        .replace("name = \"fluxcell-seed-rs\"", &format!("name = \"{name}\""))
+        .replace(
+            "description = \"Canonical barebones Rust starter seed for SpectraFlux WebAssembly Fluxcells\"",
+            &format!("description = \"{name} WebAssembly Fluxcell for SpectraFlux\""),
+        );
     fs::write(target_dir.join("Cargo.toml"), cargo_toml)?;
 
-    // build.rs
-    let build_rs = r#"use std::process::Command;
-
-fn main() {
-    let git_hash = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|out| String::from_utf8(out.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    println!("cargo:rustc-env=GIT_HASH={git_hash}");
-    println!("cargo:rustc-env=BUILD_TIMESTAMP={}", chrono::Utc::now().to_rfc3339());
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=wit/fluxcell.wit");
-}
-"#;
-    fs::write(target_dir.join("build.rs"), build_rs)?;
-
-    // build.sh
-    let build_sh = r#"#!/usr/bin/env bash
-set -euo pipefail
-
-echo "==> Verifying wasm32-wasip1 target..."
-rustup target add wasm32-wasip1 2>/dev/null || true
-
-echo "==> Compiling Fluxcell..."
-cargo build --target wasm32-wasip1 --release
-
-WASM_PATH=$(find target/wasm32-wasip1/release -maxdepth 1 -name "*.wasm" ! -name "*.*.wasm" | head -n 1)
-
-if [ -n "$WASM_PATH" ]; then
-    SIZE=$(du -h "$WASM_PATH" | cut -f1)
-    SHA256=$(shasum -a 256 "$WASM_PATH" | cut -d ' ' -f 1)
-    echo "✓ Built: $WASM_PATH ($SIZE)"
-    echo "✓ SHA-256: $SHA256"
-fi
-"#;
-    fs::write(target_dir.join("build.sh"), build_sh)?;
-
+    fs::write(target_dir.join("build.rs"), RUST_SEED_BUILD_RS)?;
+    fs::write(target_dir.join("build.sh"), RUST_SEED_BUILD_SH)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(target_dir.join("build.sh"), fs::Permissions::from_mode(0o755));
     }
 
-    // wit/fluxcell.wit
-    let wit_content = r#"package spectra:fluxcell@0.1.0;
+    fs::write(target_dir.join("wit/fluxcell.wit"), RUST_SEED_WIT)?;
+    fs::write(target_dir.join(".gitignore"), RUST_SEED_GITIGNORE)?;
 
-interface types {
-    record http-request {
-        method: string,
-        uri: string,
-        headers: list<tuple<string, string>>,
-        body: list<u8>,
-    }
-
-    record http-response {
-        status: u16,
-        headers: list<tuple<string, string>>,
-        body: list<u8>,
-    }
-
-    record event-packet {
-        topic: string,
-        id: string,
-        timestamp: u64,
-        payload: list<u8>,
-    }
-
-    record route-def {
-        method: string,
-        path: string,
-    }
-}
-
-world fluxcell {
-    use types.{http-request, http-response, event-packet, route-def};
-
-    import kv-store: interface {
-        get: func(key: string) -> option<list<u8>>;
-        set: func(key: string, value: list<u8>, ttl-seconds: option<u64>) -> result<_, string>;
-        delete: func(key: string) -> result<bool, string>;
-    };
-
-    export get-routes: func() -> list<route-def>;
-    export get-subscriptions: func() -> list<string>;
-    export handle-event: func(event: event-packet) -> result<_, string>;
-    export handle-http: func(request: http-request) -> http-response;
-}
-"#;
-    fs::write(target_dir.join("wit/fluxcell.wit"), wit_content)?;
-
-    // .gitignore
-    let gitignore = "/target\n*.wasm\n.DS_Store\n";
-    fs::write(target_dir.join(".gitignore"), gitignore)?;
-
-    // .github/workflows/release.yml
     let workflow = format!(
 r#"name: Release Fluxcell Wasm
 
@@ -303,147 +234,57 @@ jobs:
 "#);
     fs::write(target_dir.join(".github/workflows/release.yml"), workflow)?;
 
-    // src/lib.rs
     let lib_rs = if template == "mailer" || template == "invoice-mailer" {
-        include_str!("../../../examples/rust/mailer/src/lib.rs")
+        RUST_MAILER_LIB_RS.to_string()
     } else {
-        r#"use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize)]
-pub struct RouteDefinition {
-    pub method: String,
-    pub path: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct FluxcellMetadata {
-    pub name: String,
-    pub version: String,
-    pub git_hash: String,
-    pub build_timestamp: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct HttpResponse {
-    pub status: u16,
-    pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
-}
-
-pub fn routes() -> Vec<RouteDefinition> {
-    vec![
-        RouteDefinition { method: "GET".into(), path: "/health".into() },
-        RouteDefinition { method: "GET".into(), path: "/status".into() },
-        RouteDefinition { method: "POST".into(), path: "/echo".into() },
-    ]
-}
-
-pub fn subscriptions() -> Vec<String> {
-    vec!["events.incoming".to_string(), "mutation.*".to_string()]
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn get_routes() -> u64 {
-    let json = serde_json::to_string(&routes()).unwrap_or_else(|_| "[]".into());
-    pack_string(json)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn get_subscriptions() -> u64 {
-    let json = serde_json::to_string(&subscriptions()).unwrap_or_else(|_| "[]".into());
-    pack_string(json)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn get_metadata() -> u64 {
-    let meta = FluxcellMetadata {
-        name: env!("CARGO_PKG_NAME").to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        git_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
-        build_timestamp: option_env!("BUILD_TIMESTAMP").unwrap_or("").to_string(),
-    };
-    let json = serde_json::to_string(&meta).unwrap_or_else(|_| "{}".into());
-    pack_string(json)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn handle_http(ptr: u32, len: u32) -> u64 {
-    let _input = unpack_string(ptr, len);
-    let resp = HttpResponse {
-        status: 200,
-        headers: vec![("content-type".into(), "application/json".into())],
-        body: serde_json::json!({
-            "status": "ok",
-            "cell": env!("CARGO_PKG_NAME"),
-            "version": env!("CARGO_PKG_VERSION"),
-        }).to_string().into_bytes(),
-    };
-    let json = serde_json::to_string(&resp).unwrap_or_default();
-    pack_string(json)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn handle_event(ptr: u32, len: u32) -> u64 {
-    let _input = unpack_string(ptr, len);
-    pack_string("{\"status\":\"processed\"}".to_string())
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn allocate(size: usize) -> *mut u8 {
-    let mut buf = Vec::with_capacity(size);
-    let ptr = buf.as_mut_ptr();
-    std::mem::forget(buf);
-    ptr
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn deallocate(ptr: *mut u8, size: usize) {
-    if !ptr.is_null() {
-        unsafe { drop(Vec::from_raw_parts(ptr, 0, size)) };
-    }
-}
-
-fn pack_string(s: String) -> u64 {
-    let bytes = s.into_bytes();
-    let len = bytes.len() as u64;
-    let ptr = bytes.as_ptr() as u64;
-    std::mem::forget(bytes);
-    (len << 32) | (ptr & 0xFFFF_FFFF)
-}
-
-fn unpack_string(ptr: u32, len: u32) -> String {
-    unsafe {
-        let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
-        String::from_utf8_lossy(slice).to_string()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_routes_validity() {
-        let r = routes();
-        assert_eq!(r.len(), 3);
-        assert_eq!(r[0].path, "/health");
-    }
-
-    #[test]
-    fn test_subscriptions_validity() {
-        let s = subscriptions();
-        assert_eq!(s.len(), 2);
-    }
-}
-"#
+        RUST_SEED_LIB_RS.to_string()
     };
     fs::write(target_dir.join("src/lib.rs"), lib_rs)?;
 
-    println!("✓ Successfully created Fluxcell '{name}'!");
+    println!("✓ Successfully created Rust Fluxcell '{name}'!");
     println!("\nNext steps:");
     println!("  cd {}", target_dir.display());
     println!("  fluxcell build");
     println!("  fluxcell deploy --dev-upload");
+
+    Ok(())
+}
+
+fn scaffold_ts_fluxcell(name: &str, target_dir: &Path, _template: &str) -> Result<()> {
+    println!("⚡ Scaffolding new TypeScript Fluxcell '{name}' from canonical seed at {}...", target_dir.display());
+
+    fs::create_dir_all(target_dir.join("assembly"))?;
+    fs::create_dir_all(target_dir.join("wit"))?;
+
+    let pkg_json = TS_SEED_PACKAGE_JSON
+        .replace("\"name\": \"fluxcell-seed-ts\"", &format!("\"name\": \"{name}\""))
+        .replace(
+            "\"description\": \"Canonical barebones TypeScript starter seed for SpectraFlux WebAssembly Fluxcells\"",
+            &format!("\"description\": \"{name} WebAssembly Fluxcell for SpectraFlux\""),
+        );
+    fs::write(target_dir.join("package.json"), pkg_json)?;
+
+    fs::write(target_dir.join("asconfig.json"), TS_SEED_ASCONFIG_JSON)?;
+    fs::write(target_dir.join("tsconfig.json"), TS_SEED_TSCONFIG_JSON)?;
+    fs::write(target_dir.join("build.sh"), TS_SEED_BUILD_SH)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(target_dir.join("build.sh"), fs::Permissions::from_mode(0o755));
+    }
+
+    fs::write(target_dir.join("wit/fluxcell.wit"), RUST_SEED_WIT)?;
+    fs::write(target_dir.join(".gitignore"), TS_SEED_GITIGNORE)?;
+    fs::write(target_dir.join("assembly/index.ts"), TS_SEED_INDEX_TS)?;
+    fs::write(target_dir.join("README.md"), TS_SEED_README_MD)?;
+
+    println!("✓ Successfully created TypeScript Fluxcell '{name}'!");
+    println!("\nNext steps:");
+    println!("  cd {}", target_dir.display());
+    println!("  bun install        # or npm install");
+    println!("  bun run build      # or npm run build");
+    println!("  bun test           # or npm test");
+    println!("  bun run deploy --dev-upload");
 
     Ok(())
 }
