@@ -1,6 +1,18 @@
-# SpectraFlux
+<p align="center">
+  <img src="assets/spectraflux_logo.svg" alt="SpectraFlux Logo" width="260" />
+</p>
 
-**SpectraFlux** is the high-velocity, streaming execution chassis and WebAssembly **Fluxcell** runtime for the SpectraGQL platform.
+<p align="center">
+  <strong>The High-Velocity Streaming Execution Chassis &amp; WebAssembly Runtime</strong><br>
+  <em>Executing sandboxed event-driven Fluxcells with sub-millisecond dispatch and hardware isolation.</em>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-2024%20edition-orange.svg" alt="Rust Edition" /></a>
+  <a href="https://bytecodealliance.org/"><img src="https://img.shields.io/badge/wasm-wasmtime%20engine-black.svg" alt="Wasmtime" /></a>
+  <a href="BUG_FIX_LOG.md"><img src="https://img.shields.io/badge/bug%20fix%20log-active-brightgreen.svg" alt="Bug Fix Log" /></a>
+</p>
 
 ---
 
@@ -34,7 +46,7 @@
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │ Dynamic WebAssembly Fluxcells (Sandboxed Micro-Units)                 │  │
 │  │   • coeval-vote, magic-link, webhook, custom guest cells              │  │
-│  │   • Authoring via fluxcell-sdk (Rust) and @spectragql/fluxcell (TS)   │  │
+│  │   • Authoring via fluxcell-sdk (Rust) and @spectraflux/sdk (TS)       │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -64,7 +76,12 @@
 
 ## 3. Quick Start: Developing a Fluxcell in Rust
 
-Add the SDK to your `Cargo.toml`:
+Scaffold instantly via the CLI:
+```bash
+fluxcell new my-rust-cell --lang rust
+```
+
+Or add the SDK to your `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -119,12 +136,81 @@ export_fluxcell!(MyCell);
 
 ---
 
-## 4. Building and Testing
+## 4. Quick Start: Developing a Fluxcell in TypeScript
+
+Scaffold instantly via the CLI:
+```bash
+fluxcell new my-ts-cell --lang ts
+```
+
+Or use the TypeScript SDK directly:
+```bash
+cd seeds/typescript
+bun install
+bun run build
+bun test
+```
+
+Write your Fluxcell in AssemblyScript / TypeScript:
+
+```typescript
+import {
+  Fluxcell,
+  FluxcellMetadata,
+  HttpRequest,
+  HttpResponse,
+  RouteMeta,
+  registerFluxcell,
+} from "@spectraflux/sdk/assembly/index";
+
+export class MyTsCell extends Fluxcell {
+  metadata(): FluxcellMetadata {
+    return new FluxcellMetadata("0.1.0", "My TypeScript Fluxcell");
+  }
+
+  routes(): RouteMeta[] {
+    return [
+      RouteMeta.get("/health", "Health check endpoint"),
+      RouteMeta.post("/mutate", "Transactional mutation"),
+    ];
+  }
+
+  handleHttp(req: HttpRequest): HttpResponse {
+    if (req.path == "/health") {
+      return HttpResponse.json('{"status":"healthy"}');
+    }
+    return HttpResponse.notFound("Endpoint not found");
+  }
+}
+
+registerFluxcell(new MyTsCell());
+
+// Re-export C-ABI functions for the SpectraFlux Wasmtime host
+export {
+  allocate,
+  deallocate,
+  get_metadata,
+  get_subscriptions,
+  get_routes,
+  handle_http,
+  handle_event,
+} from "@spectraflux/sdk/assembly/index";
+```
+
+---
+
+## 5. Building and Testing
 
 ```bash
-# Run tests across entire workspace
+# Run Rust tests across entire workspace
 cargo test --workspace
 
 # Build the chassis binary
 cargo build --package spectra-flux --release
+
+# Build & test TypeScript SDK and Seed
+cd seeds/typescript
+bun run build
+bun test
 ```
+
