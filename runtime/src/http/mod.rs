@@ -4,6 +4,8 @@ use matchit::Router;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub const ADMIN_HTML: &str = include_str!("assets/admin.html");
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RouteDefinition {
     pub method: String,
@@ -258,6 +260,21 @@ impl FluxRouter {
             path: path.to_string(),
         })
     }
+
+    pub fn get_fluxcells_summary(&self) -> serde_json::Value {
+        let mut cells = serde_json::Map::new();
+        for (name, (mount, routes)) in &self.fluxcell_routes {
+            cells.insert(
+                name.clone(),
+                serde_json::json!({
+                    "mountPath": mount,
+                    "routesCount": routes.len(),
+                    "routes": routes,
+                }),
+            );
+        }
+        serde_json::Value::Object(cells)
+    }
 }
 
 impl Default for FluxRouter {
@@ -363,7 +380,7 @@ where
             .unwrap());
     }
 
-    if path == "/metrics" {
+    if path == "/metrics" || path == "/admin/api/v1/metrics" {
         let uptime = telemetry.started_at.elapsed().as_secs();
         let body = serde_json::json!({
             "worker_id": telemetry.worker_id,
@@ -378,13 +395,60 @@ where
             .unwrap());
     }
 
-    if path == "/admin/logs" {
+    if path == "/admin/logs" || path == "/admin/api/v1/logs" {
         let logs = telemetry.get_recent_logs();
         let body = serde_json::to_string(&logs).unwrap_or_else(|_| "[]".to_string());
         return Ok(Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "application/json")
             .body(Full::new(bytes::Bytes::from(body)))
+            .unwrap());
+    }
+
+    // Mini-Datadog Admin Dashboard UI
+    if path == "/admin" || path == "/admin/" || path == "/dashboard" {
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/html; charset=utf-8")
+            .body(Full::new(bytes::Bytes::from(ADMIN_HTML)))
+            .unwrap());
+    }
+
+    // Mini-Datadog Admin Overview API
+    if path == "/admin/api/v1/overview" {
+        let uptime = telemetry.started_at.elapsed().as_secs();
+        let processed = telemetry.processed_events.load(std::sync::atomic::Ordering::Relaxed);
+        let errors = telemetry.error_count.load(std::sync::atomic::Ordering::Relaxed);
+        let cells = {
+            let r = router.read().unwrap();
+            r.get_fluxcells_summary()
+        };
+        let body = serde_json::json!({
+            "workerId": telemetry.worker_id,
+            "uptimeSeconds": uptime,
+            "processedEvents": processed,
+            "errors": errors,
+            "fluxcells": cells,
+        });
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Full::new(bytes::Bytes::from(body.to_string())))
+            .unwrap());
+    }
+
+    // Checkpoints inspection endpoint
+    if path.starts_with("/admin/api/v1/checkpoints") {
+        let cmd_id = path.strip_prefix("/admin/api/v1/checkpoints/").unwrap_or("");
+        let body = serde_json::json!({
+            "commandId": cmd_id,
+            "status": "active",
+            "memoized": true
+        });
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Full::new(bytes::Bytes::from(body.to_string())))
             .unwrap());
     }
 
@@ -943,6 +1007,49 @@ mod tests {
         let json: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
         assert!(!json.is_empty());
         assert_eq!(json[0]["message"], "Initialized test");
+
+        // 6. /admin and /dashboard HTML UI
+        let req = Request::builder().uri("/admin").body(Full::new(bytes::Bytes::new())).unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get("Content-Type").unwrap(), "text/html; charset=utf-8");
+        let html_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let html_str = String::from_utf8_lossy(&html_bytes);
+        assert!(html_str.contains("Mini-Datadog Active"));
+
+        let req = Request::builder().uri("/dashboard").body(Full::new(bytes::Bytes::new())).unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 7. /admin/api/v1/overview
+        let req = Request::builder().uri("/admin/api/v1/overview").body(Full::new(bytes::Bytes::new())).unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let overview: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(overview["workerId"], "worker-test-1");
+        assert!(overview.get("fluxcells").is_some());
+
+        // 8. /admin/api/v1/logs
+        let req = Request::builder().uri("/admin/api/v1/logs").body(Full::new(bytes::Bytes::new())).unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let logs: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(!logs.is_empty());
+
+        // 9. /admin/api/v1/metrics
+        let req = Request::builder().uri("/admin/api/v1/metrics").body(Full::new(bytes::Bytes::new())).unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 10. /admin/api/v1/checkpoints/:cmd_id
+        let req = Request::builder().uri("/admin/api/v1/checkpoints/018f3a2b-1234").body(Full::new(bytes::Bytes::new())).unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let chk: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(chk["commandId"], "018f3a2b-1234");
     }
 
     #[tokio::test]

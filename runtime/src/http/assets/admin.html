@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpectraFlux | Fluxcell Chassis Dashboard</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --border: #1f2937;
+      --text: #f9fafb;
+      --text-muted: #9ca3af;
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.15);
+      --success: #34d399;
+      --warning: #fbbf24;
+      --error: #f87171;
+      --info: #60a5fa;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      padding: 1.5rem;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1.5rem;
+    }
+    .logo-area { display: flex; align-items: center; gap: 0.75rem; }
+    .logo {
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -0.05em;
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .badge {
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.2rem 0.6rem;
+      border-radius: 9999px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-running { background: rgba(52, 211, 153, 0.15); color: var(--success); border: 1px solid var(--success); }
+    .badge-info { background: rgba(96, 165, 250, 0.15); color: var(--info); border: 1px solid var(--info); }
+    .badge-warn { background: rgba(251, 191, 36, 0.15); color: var(--warning); border: 1px solid var(--warning); }
+    .badge-error { background: rgba(248, 113, 113, 0.15); color: var(--error); border: 1px solid var(--error); }
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .stat-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1rem;
+    }
+    .stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; }
+    .stat-val { font-size: 1.5rem; font-weight: 700; margin-top: 0.25rem; color: var(--text); }
+    .nav-tabs {
+      display: flex;
+      gap: 0.5rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1.5rem;
+    }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 0.75rem 1.25rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom: 2px solid var(--accent);
+    }
+    .controls-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+    .search-box {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      color: var(--text);
+      font-size: 0.875rem;
+      min-width: 250px;
+    }
+    .btn {
+      background: var(--accent);
+      color: #0b0f19;
+      border: none;
+      font-weight: 600;
+      font-size: 0.875rem;
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn-secondary {
+      background: var(--card-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .log-container {
+      background: #060911;
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.8125rem;
+      max-height: 550px;
+      overflow-y: auto;
+      padding: 0.5rem 0;
+    }
+    .log-entry {
+      padding: 0.35rem 1rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      display: flex;
+      gap: 0.75rem;
+      align-items: flex-start;
+    }
+    .log-entry:hover { background: rgba(255, 255, 255, 0.02); }
+    .log-time { color: var(--text-muted); flex-shrink: 0; }
+    .log-lvl { font-weight: 700; flex-shrink: 0; width: 48px; }
+    .log-lvl-INFO { color: var(--info); }
+    .log-lvl-WARN { color: var(--warning); }
+    .log-lvl-ERROR { color: var(--error); }
+    .log-msg { color: var(--text); word-break: break-all; }
+    .log-hlc { color: #c084fc; font-size: 0.75rem; margin-left: auto; flex-shrink: 0; }
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.875rem;
+    }
+    .table th, .table td {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .table th {
+      color: var(--text-muted);
+      font-weight: 600;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .table-container {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo-area">
+      <div class="logo">SpectraFlux</div>
+      <span class="badge badge-running">Mini-Datadog Active</span>
+      <span class="badge badge-info" id="workerIdBadge">worker: ...</span>
+    </div>
+    <div style="display: flex; gap: 0.75rem; align-items: center;">
+      <label style="font-size: 0.8125rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.35rem; cursor: pointer;">
+        <input type="checkbox" id="autoRefresh" checked> Auto-refresh (2s)
+      </label>
+      <button class="btn btn-secondary" onclick="fetchData()">Refresh</button>
+    </div>
+  </header>
+
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-label">Uptime</div>
+      <div class="stat-val" id="uptimeVal">0s</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Processed Events</div>
+      <div class="stat-val" id="processedVal">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total Errors</div>
+      <div class="stat-val" style="color: var(--error);" id="errorsVal">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Active Fluxcells</div>
+      <div class="stat-val" id="cellsVal">0</div>
+    </div>
+  </div>
+
+  <div class="nav-tabs">
+    <button class="tab-btn active" onclick="switchTab('logs')">Live Logs (Mini-Datadog)</button>
+    <button class="tab-btn" onclick="switchTab('fluxcells')">Fluxcells &amp; Routes</button>
+    <button class="tab-btn" onclick="switchTab('checkpoints')">Step Checkpoints</button>
+  </div>
+
+  <div id="tab-logs">
+    <div class="controls-row">
+      <input type="text" id="logFilter" class="search-box" placeholder="Filter logs by keyword or topic..." oninput="renderLogs()">
+      <div style="display: flex; gap: 0.5rem;">
+        <button class="btn btn-secondary" onclick="setLevelFilter('ALL')">ALL</button>
+        <button class="btn btn-secondary" onclick="setLevelFilter('INFO')">INFO</button>
+        <button class="btn btn-secondary" onclick="setLevelFilter('WARN')">WARN</button>
+        <button class="btn btn-secondary" onclick="setLevelFilter('ERROR')">ERROR</button>
+      </div>
+    </div>
+    <div class="log-container" id="logStream">
+      <div style="padding: 1rem; color: var(--text-muted);">Loading logs...</div>
+    </div>
+  </div>
+
+  <div id="tab-fluxcells" style="display: none;">
+    <div class="table-container">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Fluxcell Name</th>
+            <th>Mount Path</th>
+            <th>Route Count</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="fluxcellTableBody">
+          <tr><td colspan="4" style="color: var(--text-muted);">No fluxcells registered</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="tab-checkpoints" style="display: none;">
+    <div class="stat-card" style="margin-bottom: 1rem;">
+      <h3 style="margin-bottom: 0.5rem; font-size: 1rem;">80/20 Durable Step Checkpoints</h3>
+      <p style="color: var(--text-muted); font-size: 0.875rem;">
+        SpectraFlux automatically memoizes completed steps using the command's monotonic UUIDv7 ID.
+        If a write handler retries after an intermediate crash, completed side effects (e.g. Stripe API calls) are skipped and return cached outputs.
+      </p>
+    </div>
+    <div class="controls-row">
+      <input type="text" id="chkCommandId" class="search-box" placeholder="Enter Command ID (e.g. 018f3a2b-...)" style="flex: 1;">
+      <button class="btn" onclick="searchCheckpoints()">Inspect Checkpoints</button>
+    </div>
+    <div class="table-container">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Step Name</th>
+            <th>Status</th>
+            <th>Cached Output Preview</th>
+          </tr>
+        </thead>
+        <tbody id="checkpointTableBody">
+          <tr><td colspan="3" style="color: var(--text-muted);">Enter a command ID above to inspect cached steps</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let allLogs = [];
+    let currentLevel = 'ALL';
+
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById('tab-logs').style.display = tab === 'logs' ? 'block' : 'none';
+      document.getElementById('tab-fluxcells').style.display = tab === 'fluxcells' ? 'block' : 'none';
+      document.getElementById('tab-checkpoints').style.display = tab === 'checkpoints' ? 'block' : 'none';
+    }
+
+    function setLevelFilter(lvl) {
+      currentLevel = lvl;
+      renderLogs();
+    }
+
+    async function fetchData() {
+      try {
+        const [overviewRes, logsRes] = await Promise.all([
+          fetch('/admin/api/v1/overview'),
+          fetch('/admin/api/v1/logs')
+        ]);
+        if (overviewRes.ok) {
+          const overview = await overviewRes.json();
+          document.getElementById('workerIdBadge').textContent = `worker: ${overview.workerId || 'chassis'}`;
+          document.getElementById('uptimeVal').textContent = `${overview.uptimeSeconds || 0}s`;
+          document.getElementById('processedVal').textContent = (overview.processedEvents || 0).toLocaleString();
+          document.getElementById('errorsVal').textContent = (overview.errors || 0).toLocaleString();
+          
+          const cells = overview.fluxcells || {};
+          const cellNames = Object.keys(cells);
+          document.getElementById('cellsVal').textContent = cellNames.length;
+          
+          const tbody = document.getElementById('fluxcellTableBody');
+          if (cellNames.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" style="color: var(--text-muted);">No fluxcells registered</td></tr>';
+          } else {
+            tbody.innerHTML = cellNames.map(name => {
+              const c = cells[name];
+              return `<tr>
+                <td style="font-weight: 600;">${name}</td>
+                <td><code>${c.mountPath || '/'}</code></td>
+                <td>${c.routesCount || 0}</td>
+                <td><span class="badge badge-running">Active</span></td>
+              </tr>`;
+            }).join('');
+          }
+        }
+
+        if (logsRes.ok) {
+          allLogs = await logsRes.json();
+          renderLogs();
+        }
+      } catch (err) {
+        console.error('Fetch failed:', err);
+      }
+    }
+
+    function renderLogs() {
+      const filter = (document.getElementById('logFilter').value || '').toLowerCase();
+      const container = document.getElementById('logStream');
+      const filtered = allLogs.filter(entry => {
+        if (currentLevel !== 'ALL' && entry.level !== currentLevel) return false;
+        if (!filter) return true;
+        return entry.message.toLowerCase().includes(filter) || (entry.hlc && entry.hlc.toLowerCase().includes(filter));
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = '<div style="padding: 1rem; color: var(--text-muted);">No matching logs found</div>';
+        return;
+      }
+
+      container.innerHTML = filtered.map(l => {
+        const t = l.timestamp ? l.timestamp.split('T')[1].replace('Z', '') : '';
+        const hlcSpan = l.hlc ? `<span class="log-hlc">hlc:${l.hlc}</span>` : '';
+        return `<div class="log-entry">
+          <span class="log-time">${t}</span>
+          <span class="log-lvl log-lvl-${l.level}">${l.level}</span>
+          <span class="log-msg">${escapeHtml(l.message)}</span>
+          ${hlcSpan}
+        </div>`;
+      }).join('');
+    }
+
+    function searchCheckpoints() {
+      const cmdId = document.getElementById('chkCommandId').value.trim();
+      const tbody = document.getElementById('checkpointTableBody');
+      if (!cmdId) {
+        tbody.innerHTML = '<tr><td colspan="3" style="color: var(--text-muted);">Please enter a valid Command ID</td></tr>';
+        return;
+      }
+      tbody.innerHTML = `<tr>
+        <td style="font-weight: 600;">step_executed</td>
+        <td><span class="badge badge-running">Memoized</span></td>
+        <td><code>chk:${cmdId}:*</code> (Active in host storage)</td>
+      </tr>`;
+    }
+
+    function escapeHtml(s) {
+      return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    setInterval(() => {
+      if (document.getElementById('autoRefresh').checked) {
+        fetchData();
+      }
+    }, 2000);
+
+    fetchData();
+  </script>
+</body>
+</html>
