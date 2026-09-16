@@ -5,12 +5,15 @@
 //! and the `export_fluxcell!` entrypoint macro.
 
 pub mod abi;
+pub mod causal;
 pub mod db;
+pub mod dedup;
 pub mod event;
 pub mod hlc;
 pub mod http;
 pub mod macros;
 pub mod prelude;
+pub mod telemetry;
 
 use serde::{Deserialize, Serialize};
 
