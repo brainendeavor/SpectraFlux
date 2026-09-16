@@ -27,6 +27,8 @@ pub struct FluxConfig {
     pub fluxcells: HashMap<String, FluxcellConfig>,
     #[serde(default)]
     pub deployer: DeployerConfig,
+    #[serde(default)]
+    pub resilience: ResilienceConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +76,7 @@ impl FluxConfig {
             profiles: default_profiles(),
             fluxcells: HashMap::new(),
             deployer: DeployerConfig::default(),
+            resilience: ResilienceConfig::default(),
         }
     }
 
@@ -404,6 +407,52 @@ impl Default for DeployerConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResilienceConfig {
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_backoff_initial_ms")]
+    pub backoff_initial_ms: u64,
+    #[serde(default = "default_backoff_max_ms")]
+    pub backoff_max_ms: u64,
+    #[serde(default = "default_dlq_topic_prefix")]
+    pub dlq_topic_prefix: String,
+    #[serde(default = "default_dlq_enabled")]
+    pub dlq_enabled: bool,
+}
+
+fn default_max_retries() -> u32 {
+    3
+}
+
+fn default_backoff_initial_ms() -> u64 {
+    200
+}
+
+fn default_backoff_max_ms() -> u64 {
+    10_000
+}
+
+fn default_dlq_topic_prefix() -> String {
+    "dlq.".to_string()
+}
+
+fn default_dlq_enabled() -> bool {
+    true
+}
+
+impl Default for ResilienceConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: default_max_retries(),
+            backoff_initial_ms: default_backoff_initial_ms(),
+            backoff_max_ms: default_backoff_max_ms(),
+            dlq_topic_prefix: default_dlq_topic_prefix(),
+            dlq_enabled: default_dlq_enabled(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +476,11 @@ mod tests {
         assert!(cfg.deployer.require_https);
         assert!(cfg.deployer.block_private_networks);
         assert_eq!(cfg.deployer.storage_dir, "fluxcells");
+        assert_eq!(cfg.resilience.max_retries, 3);
+        assert_eq!(cfg.resilience.backoff_initial_ms, 200);
+        assert_eq!(cfg.resilience.backoff_max_ms, 10_000);
+        assert_eq!(cfg.resilience.dlq_topic_prefix, "dlq.");
+        assert!(cfg.resilience.dlq_enabled);
     }
 
     #[test]

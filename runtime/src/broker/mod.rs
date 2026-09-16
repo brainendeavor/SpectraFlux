@@ -11,6 +11,7 @@ pub struct BrokerMessage {
     pub id: String,
     pub topic: String,
     pub payload: Vec<u8>,
+    pub delivery_attempt: u32,
 }
 
 #[async_trait::async_trait]
@@ -22,6 +23,7 @@ pub trait BrokerConsumerAdapter: Send + Sync {
     ) -> Result<Pin<Box<dyn Stream<Item = BrokerMessage> + Send>>>;
     async fn ack(&self, message: &BrokerMessage) -> Result<()>;
     async fn nack(&self, message: &BrokerMessage, delay: Duration) -> Result<()>;
+    async fn publish(&self, topic: &str, payload: &[u8]) -> Result<()>;
 }
 
 pub struct ChannelStream {
@@ -74,11 +76,23 @@ impl BrokerConsumerAdapter for InMemoryBroker {
 
     async fn nack(&self, message: &BrokerMessage, delay: Duration) -> Result<()> {
         let tx = self.sender.clone();
-        let msg = message.clone();
+        let mut msg = message.clone();
+        msg.delivery_attempt += 1;
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
             let _ = tx.send(msg).await;
         });
+        Ok(())
+    }
+
+    async fn publish(&self, topic: &str, payload: &[u8]) -> Result<()> {
+        let msg = BrokerMessage {
+            id: uuid::Uuid::now_v7().to_string(),
+            topic: topic.to_string(),
+            payload: payload.to_vec(),
+            delivery_attempt: 1,
+        };
+        let _ = self.sender.send(msg).await;
         Ok(())
     }
 }
@@ -123,6 +137,7 @@ impl BrokerConsumerAdapter for NatsConsumerAdapter {
             id: uuid::Uuid::now_v7().to_string(),
             topic: msg.subject.to_string(),
             payload: msg.payload.to_vec(),
+            delivery_attempt: 1,
         });
 
         Ok(Box::pin(stream))
@@ -135,6 +150,13 @@ impl BrokerConsumerAdapter for NatsConsumerAdapter {
 
     async fn nack(&self, _message: &BrokerMessage, _delay: Duration) -> Result<()> {
         Ok(())
+    }
+
+    async fn publish(&self, topic: &str, payload: &[u8]) -> Result<()> {
+        self.client
+            .publish(topic.to_string(), payload.to_vec().into())
+            .await
+            .map_err(|e| anyhow!("NATS publish error: {}", e))
     }
 }
 
@@ -172,6 +194,7 @@ mod tests {
             id: "msg-1".to_string(),
             topic: "test.events".to_string(),
             payload: b"hello flux".to_vec(),
+            delivery_attempt: 1,
         })
         .await
         .unwrap();
@@ -180,5 +203,6 @@ mod tests {
         assert_eq!(msg.id, "msg-1");
         assert_eq!(msg.topic, "test.events");
         assert_eq!(msg.payload, b"hello flux");
+        assert_eq!(msg.delivery_attempt, 1);
     }
 }

@@ -229,6 +229,7 @@ async fn main() -> Result<()> {
             let storage_clone = storage.clone();
             let dep_broker = deployer.clone();
             let wasm_clone = wasm_host.clone();
+            let resilience_clone = config.resilience.clone();
             let subjects = vec![
                 "mutation.>".to_string(),
                 "webhook.>".to_string(),
@@ -341,6 +342,10 @@ async fn main() -> Result<()> {
 
                             // Dispatch event to matching WASM fluxcells
                             let subscribed_cells = wasm_clone.find_subscribed_fluxcells(&msg.topic);
+                            let mut all_succeeded = true;
+                            let mut dlq_requested = false;
+                            let mut failure_reason = String::new();
+
                             for cell_name in subscribed_cells {
                                 if let Ok(payload_val) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
                                     let wasm_exec = wasm_clone.clone();
@@ -369,6 +374,16 @@ async fn main() -> Result<()> {
                                     match res {
                                         Ok(r) => {
                                             let status_str = r.get("status").and_then(|s| s.as_str()).unwrap_or("ok");
+                                            if status_str == "dead_letter" || status_str == "dead-letter" {
+                                                dlq_requested = true;
+                                                failure_reason = format!("Fluxcell '{}' requested dead_letter: {:?}", cell_name, r.get("error"));
+                                                all_succeeded = false;
+                                                break;
+                                            } else if status_str == "nack" || status_str == "error" {
+                                                all_succeeded = false;
+                                                failure_reason = format!("Fluxcell '{}' returned nack: {:?}", cell_name, r.get("error"));
+                                                break;
+                                            }
                                             tele_exec.record_log(
                                                 "INFO",
                                                 &format!("Fluxcell '{}' processed event topic='{}': status={}", cell_name, topic, status_str),
@@ -376,18 +391,62 @@ async fn main() -> Result<()> {
                                             );
                                         }
                                         Err(e) => {
+                                            all_succeeded = false;
+                                            failure_reason = format!("Fluxcell '{}' failed: {}", cell_name, e);
                                             tele_exec.increment_error();
                                             tele_exec.record_log(
                                                 "ERROR",
                                                 &format!("Fluxcell '{}' failed to process event topic='{}': {}", cell_name, topic, e),
                                                 None,
                                             );
+                                            break;
                                         }
                                     }
                                 }
                             }
 
-                            let _ = broker.ack(&msg).await;
+                            if all_succeeded && !dlq_requested {
+                                let _ = broker.ack(&msg).await;
+                            } else if dlq_requested || msg.delivery_attempt >= resilience_clone.max_retries {
+                                // Route to Dead-Letter Queue if enabled
+                                if resilience_clone.dlq_enabled {
+                                    let dlq_topic = format!("{}{}", resilience_clone.dlq_topic_prefix, msg.topic);
+                                    let envelope = serde_json::json!({
+                                        "messageId": msg.id,
+                                        "originalTopic": msg.topic,
+                                        "payload": serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap_or(serde_json::Value::Null),
+                                        "deliveryAttempts": msg.delivery_attempt,
+                                        "reason": failure_reason,
+                                        "failedAt": chrono::Utc::now().to_rfc3339(),
+                                    });
+                                    if let Ok(dlq_bytes) = serde_json::to_vec(&envelope) {
+                                        let _ = broker.publish(&dlq_topic, &dlq_bytes).await;
+                                        tele_clone.record_log(
+                                            "WARN",
+                                            &format!("Event '{}' routed to DLQ topic '{}' after {} attempts: {}", msg.id, dlq_topic, msg.delivery_attempt, failure_reason),
+                                            None,
+                                        );
+                                    }
+                                }
+                                let _ = broker.ack(&msg).await;
+                            } else {
+                                // Compute exponential backoff with jitter
+                                let exp_factor = 2u64.saturating_pow(msg.delivery_attempt.saturating_sub(1));
+                                let base_delay = resilience_clone.backoff_initial_ms.saturating_mul(exp_factor);
+                                let capped_delay = base_delay.min(resilience_clone.backoff_max_ms);
+                                let jitter = (std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .subsec_nanos() as u64 % 50)
+                                    .min(capped_delay / 4);
+                                let delay = std::time::Duration::from_millis(capped_delay + jitter);
+                                tele_clone.record_log(
+                                    "WARN",
+                                    &format!("Event '{}' nacked (attempt {}/{}), retrying in {:?}: {}", msg.id, msg.delivery_attempt, resilience_clone.max_retries, delay, failure_reason),
+                                    None,
+                                );
+                                let _ = broker.nack(&msg, delay).await;
+                            }
                         }
                     }
                     Err(e) => {
