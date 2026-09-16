@@ -36,6 +36,7 @@ impl FluxcellDeployer {
 
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_default();
 

@@ -126,6 +126,10 @@ pub fn is_forbidden_ip(ip: &IpAddr) -> bool {
             if octets[0] == 0 {
                 return true;
             }
+            // Carrier-Grade NAT (CGNAT) / Shared Address Space 100.64.0.0/10 (RFC 6598)
+            if octets[0] == 100 && (octets[1] & 0xc0) == 64 {
+                return true;
+            }
             // Cloud Metadata / Link-Local 169.254.0.0/16 (e.g. AWS IMDS 169.254.169.254)
             if octets[0] == 169 && octets[1] == 254 {
                 return true;
@@ -155,6 +159,10 @@ pub fn is_forbidden_ip(ip: &IpAddr) -> bool {
             // IPv6 link-local fe80::/10
             let segments = v6.segments();
             if (segments[0] & 0xffc0) == 0xfe80 {
+                return true;
+            }
+            // IPv6 Unique Local Addresses fc00::/7 (RFC 4193, fc00:: - fdff::)
+            if (segments[0] & 0xfe00) == 0xfc00 {
                 return true;
             }
             // IPv4-mapped IPv6
@@ -204,5 +212,26 @@ mod tests {
         let shield = SSRFShield::new(vec!["github.com/my-org/".to_string()], true, false);
         let url = shield.validate_url("https://github.com/my-org/invoice-mailer/releases/v1.0.0.wasm").await.unwrap();
         assert_eq!(url.host_str(), Some("github.com"));
+    }
+
+    #[test]
+    fn test_is_forbidden_ip_cgnat_and_ipv6_unique_local() {
+        let cgnat: IpAddr = "100.64.0.1".parse().unwrap();
+        assert!(is_forbidden_ip(&cgnat), "100.64.0.1 must be forbidden (RFC 6598)");
+
+        let cgnat_edge: IpAddr = "100.127.255.254".parse().unwrap();
+        assert!(is_forbidden_ip(&cgnat_edge), "100.127.255.254 must be forbidden (RFC 6598)");
+
+        let non_cgnat: IpAddr = "100.128.0.1".parse().unwrap();
+        assert!(!is_forbidden_ip(&non_cgnat), "100.128.0.1 is public IP");
+
+        let ipv6_ula: IpAddr = "fc00::1".parse().unwrap();
+        assert!(is_forbidden_ip(&ipv6_ula), "fc00::1 must be forbidden (RFC 4193)");
+
+        let ipv6_ula_fd: IpAddr = "fd12:3456:789a::1".parse().unwrap();
+        assert!(is_forbidden_ip(&ipv6_ula_fd), "fd00::/8 must be forbidden (RFC 4193)");
+
+        let public_v6: IpAddr = "2606:4700:4700::1111".parse().unwrap();
+        assert!(!is_forbidden_ip(&public_v6), "Public Cloudflare IPv6 must not be forbidden");
     }
 }

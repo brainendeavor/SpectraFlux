@@ -457,6 +457,12 @@ where
         if let Some(dep) = &deployer {
             let mut name = req.headers().get("X-Fluxcell-Name").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
             let mut mount = req.headers().get("X-Fluxcell-Mount").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+            let mut auto_activate = req.headers().get("X-Fluxcell-Auto-Activate")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.eq_ignore_ascii_case("true") || s == "1")
+                .unwrap_or(false);
+
+            let mut timeout_ms = None;
 
             if let Some(q) = &query_string {
                 for param in q.split('&') {
@@ -464,8 +470,12 @@ where
                     if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
                         if k == "name" && name.is_none() {
                             name = Some(simple_url_decode(v));
-                        } else if k == "mount" && mount.is_none() {
+                        } else if (k == "mount" || k == "mount_path") && mount.is_none() {
                             mount = Some(simple_url_decode(v));
+                        } else if k == "auto_activate" || k == "activate" {
+                            auto_activate = v.eq_ignore_ascii_case("true") || v == "1";
+                        } else if k == "timeout_ms" {
+                            timeout_ms = v.parse::<u64>().ok();
                         }
                     }
                 }
@@ -497,8 +507,19 @@ where
                 }
             };
 
-            match dep.stage_uploaded_artifact(&cell_name, body_bytes, &mount_path, None, None) {
-                Ok(record) => {
+            let effective_timeout = timeout_ms.or(Some(10_000));
+            match dep.stage_uploaded_artifact(&cell_name, body_bytes, &mount_path, effective_timeout, None) {
+                Ok(mut record) => {
+                    if auto_activate {
+                        match dep.activate(&cell_name, &record.sha256) {
+                            Ok(active_rec) => {
+                                record = active_rec;
+                            }
+                            Err(e) => {
+                                log::warn!("Artifact staged but auto-activation failed for '{}': {}", cell_name, e);
+                            }
+                        }
+                    }
                     let body = serde_json::to_string(&record).unwrap_or_default();
                     return Ok(Response::builder()
                         .status(StatusCode::CREATED)
@@ -1190,6 +1211,74 @@ mod tests {
         // Verify guard state changed immediately
         assert!(!guard.is_external_deploy_allowed());
         assert!(!guard.is_dev_upload_allowed());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_deployer_upload_with_mount_path_and_auto_activate() {
+        let temp_dir = std::env::temp_dir().join(format!("spectral_deploy_upload_{}", uuid::Uuid::new_v4()));
+        let mut dep_cfg = crate::config::DeployerConfig::default();
+        dep_cfg.enabled = true;
+        dep_cfg.storage_dir = temp_dir.to_string_lossy().to_string();
+        dep_cfg.external_deploy_enabled = true;
+        dep_cfg.dev_upload_enabled = true;
+
+        let guard = Arc::new(crate::deployer::DeployerGuard::new(true, true));
+        let registry = Arc::new(crate::deployer::DeployerRegistry::new(&temp_dir).unwrap());
+        let wasm_host = Arc::new(crate::wasm::WasmHost::new(5, None).unwrap());
+        let router = Arc::new(std::sync::RwLock::new(FluxRouter::new()));
+
+        let deployer = Arc::new(crate::deployer::FluxcellDeployer::new(
+            dep_cfg,
+            guard,
+            registry.clone(),
+            wasm_host,
+            router.clone(),
+        ));
+
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "test-worker".to_string(),
+            "nats".to_string(),
+            None,
+            100,
+        ));
+        let dispatcher = Arc::new(MockDispatcher {
+            status: 200,
+            headers: vec![],
+            body: vec![],
+            should_fail: false,
+        });
+
+        // Valid minimal WASM module bytes
+        let wasm_bytes = wat::parse_str(
+            r#"(module
+                (memory (export "memory") 1)
+                (func (export "allocate") (param i32) (result i32) i32.const 0)
+                (func (export "deallocate") (param i32 i32))
+            )"#,
+        ).unwrap();
+
+        // Upload using mount_path and auto_activate=true query params (matching CLI behavior)
+        let req = Request::builder()
+            .method("POST")
+            .uri("/_flux/deployer/upload?name=test-upload-cell&mount_path=/custom/api&auto_activate=true")
+            .body(Full::new(bytes::Bytes::from(wasm_bytes)))
+            .unwrap();
+
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), Some(deployer.clone())).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], "test-upload-cell");
+        assert_eq!(json["mount_path"], "/custom/api");
+        // Status must be Active because auto_activate=true was specified
+        assert_eq!(json["status"], "Active");
+
+        // Verify registry record
+        let record = registry.get_record("test-upload-cell").expect("Record must be saved in registry");
+        assert_eq!(record.mount_path, "/custom/api");
+        assert_eq!(record.status, crate::deployer::FluxcellStatus::Active);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
