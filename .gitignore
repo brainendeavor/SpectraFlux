@@ -9,3 +9,17 @@ node_modules/
 .env.*
 !.env.example
 assets/concepts/
+
+# Local & App-Specific Configurations
+BUG_FIX_LOG.md
+*coeval*.toml
+*-local.toml
+*.local
+
+# Build Artifacts & Compiled Binaries
+*.wasm
+*.sha256
+dist/
+build/
+fluxcells/fluxcells.json
+fluxcells/*.wasm

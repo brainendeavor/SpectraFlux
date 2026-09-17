@@ -11,7 +11,6 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-2024%20edition-orange.svg" alt="Rust Edition" /></a>
   <a href="https://bytecodealliance.org/"><img src="https://img.shields.io/badge/wasm-wasmtime%20engine-black.svg" alt="Wasmtime" /></a>
-  <a href="BUG_FIX_LOG.md"><img src="https://img.shields.io/badge/bug%20fix%20log-active-brightgreen.svg" alt="Bug Fix Log" /></a>
 </p>
 
 ---
@@ -45,7 +44,7 @@
 │                                      ▼                                      │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │ Dynamic WebAssembly Fluxcells (Sandboxed Micro-Units)                 │  │
-│  │   • coeval-vote, magic-link, webhook, custom guest cells              │  │
+│  │   • magic-link, webhook, custom guest cells                           │  │
 │  │   • Authoring via fluxcell-sdk (Rust) and @spectraflux/sdk (TS)       │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
