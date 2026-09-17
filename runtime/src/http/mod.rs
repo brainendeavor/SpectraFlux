@@ -333,6 +333,20 @@ pub trait FluxcellHttpDispatcher: Send + Sync {
         headers: Vec<(String, String)>,
         body: Vec<u8>,
     ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), anyhow::Error>;
+
+    async fn dispatch_with_spans(
+        &self,
+        fluxcell_name: &str,
+        relative_path: &str,
+        method: &str,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>, Vec<crate::telemetry::HostCallSpan>), anyhow::Error> {
+        let (status, resp_headers, resp_body) = self
+            .dispatch(fluxcell_name, relative_path, method, headers, body)
+            .await?;
+        Ok((status, resp_headers, resp_body, Vec::new()))
+    }
 }
 
 pub async fn handle_request<B>(
@@ -341,6 +355,7 @@ pub async fn handle_request<B>(
     telemetry: Arc<crate::telemetry::TelemetryClient>,
     dispatcher: Arc<dyn FluxcellHttpDispatcher>,
     deployer: Option<Arc<crate::deployer::FluxcellDeployer>>,
+    trace_storage: Option<Arc<crate::telemetry::DomainTraceStorage>>,
 ) -> Result<Response<Full<bytes::Bytes>>, std::convert::Infallible>
 where
     B: hyper::body::Body + Send + 'static,
@@ -435,6 +450,80 @@ where
             .header("Content-Type", "application/json")
             .body(Full::new(bytes::Bytes::from(body.to_string())))
             .unwrap());
+    }
+
+    // Domain Operation Traces API
+    if path == "/admin/api/v1/traces" && method == "GET" {
+        if let Some(ts) = &trace_storage {
+            let limit = query_string
+                .as_ref()
+                .and_then(|q| {
+                    for param in q.split('&') {
+                        let mut kv = param.split('=');
+                        if let (Some("limit"), Some(v)) = (kv.next(), kv.next()) {
+                            return v.parse::<usize>().ok();
+                        }
+                    }
+                    None
+                })
+                .unwrap_or(50);
+
+            let summaries = ts.list_recent_traces(limit).await.unwrap_or_default();
+            let body = serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".to_string());
+            return Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Full::new(bytes::Bytes::from(body)))
+                .unwrap());
+        } else {
+            return Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Full::new(bytes::Bytes::from("[]")))
+                .unwrap());
+        }
+    }
+
+    if path.starts_with("/admin/api/v1/traces/") && method == "GET" {
+        let cmd_id = path.strip_prefix("/admin/api/v1/traces/").unwrap_or("").trim_matches('/');
+        if let Some(ts) = &trace_storage {
+            match ts.get_trace(cmd_id).await {
+                Ok(Some(trace)) => {
+                    let body = serde_json::to_string(&trace).unwrap_or_default();
+                    return Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(bytes::Bytes::from(body)))
+                        .unwrap());
+                }
+                Ok(None) => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
+                            "error": "TRACE_NOT_FOUND",
+                            "commandId": cmd_id
+                        }).to_string())))
+                        .unwrap());
+                }
+                Err(e) => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
+                            "error": "STORAGE_ERROR",
+                            "message": e.to_string()
+                        }).to_string())))
+                        .unwrap());
+                }
+            }
+        } else {
+            return Ok(Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("Content-Type", "application/json")
+                .body(Full::new(bytes::Bytes::from("{\"error\":\"TRACE_STORAGE_NOT_ENABLED\"}")))
+                .unwrap());
+        }
     }
 
     // Checkpoints inspection endpoint
@@ -792,11 +881,125 @@ where
         relative_path_matched
     };
 
+    let start_instant = std::time::Instant::now();
+    let started_at = chrono::Utc::now().to_rfc3339();
+
+    let payload_val: serde_json::Value =
+        serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null);
+
+    // Extract or generate command metadata for trace observability
+    let command_id = headers
+        .iter()
+        .find(|(k, _)| {
+            k.eq_ignore_ascii_case("x-command-id")
+                || k.eq_ignore_ascii_case("x-spectra-request-id")
+                || k.eq_ignore_ascii_case("x-request-id")
+                || k.eq_ignore_ascii_case("idempotency-key")
+        })
+        .map(|(_, v)| v.clone())
+        .or_else(|| {
+            payload_val
+                .get("commandId")
+                .or_else(|| payload_val.get("command_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+
+    let hlc = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-spectra-hlc") || k.eq_ignore_ascii_case("x-hlc"))
+        .map(|(_, v)| v.clone())
+        .or_else(|| {
+            payload_val
+                .get("hlc")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| {
+            format!(
+                "{}.000001",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            )
+        });
+
+    let operation_name = payload_val
+        .get("operationName")
+        .or_else(|| payload_val.get("operation_name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("{} {}", method, path));
+
     match dispatcher
-        .dispatch(&fluxcell_name, &relative_path, &method, headers, body_bytes)
+        .dispatch_with_spans(&fluxcell_name, &relative_path, &method, headers, body_bytes)
         .await
     {
-        Ok((status_code, resp_headers, resp_body)) => {
+        Ok((status_code, resp_headers, resp_body, host_calls)) => {
+            let duration_ms = start_instant.elapsed().as_secs_f64() * 1000.0;
+            let completed_at = chrono::Utc::now().to_rfc3339();
+            let is_ok = status_code < 400;
+
+            if is_ok {
+                telemetry.increment_processed(None);
+            } else {
+                telemetry.increment_error();
+            }
+
+            telemetry.record_log(
+                if is_ok { "INFO" } else { "ERROR" },
+                &format!("HTTP {} '{}' [{}] -> HTTP {} ({:.2}ms)", method, path, operation_name, status_code, duration_ms),
+                Some(hlc.clone()),
+            );
+
+            if let Some(store) = &trace_storage {
+                let resp_val: serde_json::Value = serde_json::from_slice(&resp_body).unwrap_or_else(|_| {
+                    if let Ok(s) = std::str::from_utf8(&resp_body) {
+                        serde_json::Value::String(s.to_string())
+                    } else {
+                        serde_json::Value::Null
+                    }
+                });
+
+                let step_status = if is_ok { "ok".to_string() } else { "error".to_string() };
+                let step = crate::telemetry::FluxcellStepSpan {
+                    fluxcell_name: fluxcell_name.clone(),
+                    topic: format!("http:{}", path),
+                    function_name: "handle_http".to_string(),
+                    start_time: started_at.clone(),
+                    duration_ms,
+                    status: step_status,
+                    input_preview: if payload_val.is_null() { None } else { Some(payload_val.clone()) },
+                    output_preview: Some(resp_val.clone()),
+                    error: if is_ok { None } else { Some(format!("HTTP {}", status_code)) },
+                    host_calls,
+                };
+
+                let trace = crate::telemetry::DomainOperationTrace {
+                    command_id,
+                    hlc,
+                    topic: format!("http:{}", path),
+                    operation_name,
+                    ingress: "HTTP".to_string(),
+                    worker_id: "chassis-http".to_string(),
+                    status: if is_ok { "completed".to_string() } else { "failed".to_string() },
+                    total_duration_ms: duration_ms,
+                    started_at,
+                    completed_at,
+                    initial_input: payload_val,
+                    steps: vec![step],
+                    terminal_output: Some(resp_val),
+                    error: if is_ok { None } else { Some(format!("HTTP {}", status_code)) },
+                };
+
+                let store_clone = store.clone();
+                tokio::spawn(async move {
+                    let _ = store_clone.record_trace(&trace).await;
+                });
+            }
+
             let mut builder = Response::builder().status(status_code);
             for (k, v) in resp_headers {
                 builder = builder.header(k, v);
@@ -805,6 +1008,52 @@ where
         }
         Err(e) => {
             telemetry.increment_error();
+            let duration_ms = start_instant.elapsed().as_secs_f64() * 1000.0;
+            let completed_at = chrono::Utc::now().to_rfc3339();
+
+            telemetry.record_log(
+                "ERROR",
+                &format!("HTTP {} '{}' [{}] dispatch failed: {}", method, path, operation_name, e),
+                Some(hlc.clone()),
+            );
+
+            if let Some(store) = &trace_storage {
+                let step = crate::telemetry::FluxcellStepSpan {
+                    fluxcell_name: fluxcell_name.clone(),
+                    topic: format!("http:{}", path),
+                    function_name: "handle_http".to_string(),
+                    start_time: started_at.clone(),
+                    duration_ms,
+                    status: "error".to_string(),
+                    input_preview: if payload_val.is_null() { None } else { Some(payload_val.clone()) },
+                    output_preview: None,
+                    error: Some(e.to_string()),
+                    host_calls: Vec::new(),
+                };
+
+                let trace = crate::telemetry::DomainOperationTrace {
+                    command_id,
+                    hlc,
+                    topic: format!("http:{}", path),
+                    operation_name,
+                    ingress: "HTTP".to_string(),
+                    worker_id: "chassis-http".to_string(),
+                    status: "failed".to_string(),
+                    total_duration_ms: duration_ms,
+                    started_at,
+                    completed_at,
+                    initial_input: payload_val,
+                    steps: vec![step],
+                    terminal_output: None,
+                    error: Some(e.to_string()),
+                };
+
+                let store_clone = store.clone();
+                tokio::spawn(async move {
+                    let _ = store_clone.record_trace(&trace).await;
+                });
+            }
+
             Ok(Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .header("Content-Type", "application/json")
@@ -975,7 +1224,7 @@ mod tests {
 
         // 1. /healthz
         let req = Request::builder().uri("/healthz").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
@@ -983,17 +1232,17 @@ mod tests {
 
         // 2. /healthz/ (with trailing slash)
         let req = Request::builder().uri("/healthz/").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // 3. /readyz
         let req = Request::builder().uri("/readyz").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // 4. /metrics
         let req = Request::builder().uri("/metrics").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
@@ -1001,7 +1250,7 @@ mod tests {
 
         // 5. /admin/logs
         let req = Request::builder().uri("/admin/logs").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let json: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
@@ -1010,7 +1259,7 @@ mod tests {
 
         // 6. /admin and /dashboard HTML UI
         let req = Request::builder().uri("/admin").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.headers().get("Content-Type").unwrap(), "text/html; charset=utf-8");
         let html_bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -1018,12 +1267,12 @@ mod tests {
         assert!(html_str.contains("Mini-Datadog Active"));
 
         let req = Request::builder().uri("/dashboard").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // 7. /admin/api/v1/overview
         let req = Request::builder().uri("/admin/api/v1/overview").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let overview: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
@@ -1032,7 +1281,7 @@ mod tests {
 
         // 8. /admin/api/v1/logs
         let req = Request::builder().uri("/admin/api/v1/logs").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let logs: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
@@ -1040,12 +1289,12 @@ mod tests {
 
         // 9. /admin/api/v1/metrics
         let req = Request::builder().uri("/admin/api/v1/metrics").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // 10. /admin/api/v1/checkpoints/:cmd_id
         let req = Request::builder().uri("/admin/api/v1/checkpoints/018f3a2b-1234").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let chk: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
@@ -1085,7 +1334,7 @@ mod tests {
             .body(Full::new(bytes::Bytes::from("{\"username\":\"admin\"}")))
             .unwrap();
 
-        let resp = handle_request(req, router, telemetry, dispatcher, None).await.unwrap();
+        let resp = handle_request(req, router, telemetry, dispatcher, None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FOUND);
         assert_eq!(resp.headers().get("Location").unwrap(), "/dashboard");
         assert_eq!(resp.headers().get("Set-Cookie").unwrap(), "session=abc123xyz; Path=/");
@@ -1123,7 +1372,7 @@ mod tests {
             .body(Full::new(bytes::Bytes::new()))
             .unwrap();
 
-        let resp = handle_request(req, router, telemetry, dispatcher, None).await.unwrap();
+        let resp = handle_request(req, router, telemetry, dispatcher, None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(resp.headers().get("Allow").unwrap(), "GET");
     }
@@ -1157,7 +1406,7 @@ mod tests {
             .body(Full::new(bytes::Bytes::new()))
             .unwrap();
 
-        let resp = handle_request(req, router, telemetry.clone(), dispatcher, None).await.unwrap();
+        let resp = handle_request(req, router, telemetry.clone(), dispatcher, None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(telemetry.error_count.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
@@ -1204,7 +1453,7 @@ mod tests {
             .body(Full::new(bytes::Bytes::from(big_body)))
             .unwrap();
 
-        let resp = handle_request(req, router, telemetry, Arc::new(EchoDispatcher), None).await.unwrap();
+        let resp = handle_request(req, router, telemetry, Arc::new(EchoDispatcher), None, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let resp_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(resp_bytes.len(), big_body_clone.len());
@@ -1247,7 +1496,7 @@ mod tests {
                 .body(Full::new(bytes::Bytes::new()))
                 .unwrap();
 
-            let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
+            let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
             // Should be safely rejected with 404 Not Found without panicking or path traversal
             assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         }
@@ -1294,7 +1543,7 @@ mod tests {
             .uri("/_flux/deployer/status")
             .body(Full::new(bytes::Bytes::new()))
             .unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), Some(deployer.clone())).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), Some(deployer.clone()), None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -1307,7 +1556,7 @@ mod tests {
             .uri("/admin/api/v1/security/lockdown")
             .body(Full::new(bytes::Bytes::new()))
             .unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), Some(deployer.clone())).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), Some(deployer.clone()), None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -1373,7 +1622,7 @@ mod tests {
             .body(Full::new(bytes::Bytes::from(wasm_bytes)))
             .unwrap();
 
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), Some(deployer.clone())).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), Some(deployer.clone()), None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -1388,5 +1637,207 @@ mod tests {
         assert_eq!(record.status, crate::deployer::FluxcellStatus::Active);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_admin_traces_api() {
+        let router = Arc::new(std::sync::RwLock::new(FluxRouter::new()));
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "worker-test".to_string(),
+            "nats".to_string(),
+            None,
+            100,
+        ));
+        let dispatcher = Arc::new(MockDispatcher {
+            status: 200,
+            headers: vec![],
+            body: vec![],
+            should_fail: false,
+        });
+
+        // 1. Without trace storage
+        let req = Request::builder()
+            .method("GET")
+            .uri("/admin/api/v1/traces")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body_bytes.as_ref(), b"[]");
+
+        // 2. With trace storage
+        let mem_storage = Arc::new(crate::storage::KevyStorage::new_in_memory().unwrap());
+        let trace_storage = Arc::new(crate::telemetry::DomainTraceStorage::new(mem_storage));
+
+        let trace = crate::telemetry::DomainOperationTrace {
+            command_id: "0191f6a1-0000-7000-8000-000000000001".to_string(),
+            hlc: "2026-09-16T12:00:00.000Z-0001".to_string(),
+            topic: "mutation.recordvote".to_string(),
+            operation_name: "recordVote".to_string(),
+            ingress: "QUEUE".to_string(),
+            worker_id: "worker-1".to_string(),
+            status: "completed".to_string(),
+            total_duration_ms: 1.25,
+            started_at: "2026-09-16T12:00:00Z".to_string(),
+            completed_at: "2026-09-16T12:00:00.001Z".to_string(),
+            initial_input: serde_json::json!({"proposalId": "p-123", "vote": "YES"}),
+            steps: vec![
+                crate::telemetry::FluxcellStepSpan {
+                    fluxcell_name: "voting_engine".to_string(),
+                    topic: "mutation.recordvote".to_string(),
+                    function_name: "on_event".to_string(),
+                    start_time: "2026-09-16T12:00:00Z".to_string(),
+                    duration_ms: 1.2,
+                    status: "ok".to_string(),
+                    input_preview: Some(serde_json::json!({"proposalId": "p-123"})),
+                    output_preview: Some(serde_json::json!({"tallied": true})),
+                    error: None,
+                    host_calls: vec![
+                        crate::telemetry::HostCallSpan {
+                            call_type: "db:execute".to_string(),
+                            target: "INSERT INTO votes ...".to_string(),
+                            duration_us: 800,
+                            status: "ok".to_string(),
+                            detail: Some("rows: 1".to_string()),
+                        }
+                    ],
+                }
+            ],
+            terminal_output: Some(serde_json::json!({"voteRecorded": true})),
+            error: None,
+        };
+        trace_storage.record_trace(&trace).await.unwrap();
+
+        // Query list
+        let req = Request::builder()
+            .method("GET")
+            .uri("/admin/api/v1/traces")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, Some(trace_storage.clone())).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let list: Vec<crate::telemetry::RecentTraceSummary> = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].command_id, "0191f6a1-0000-7000-8000-000000000001");
+        assert_eq!(list[0].step_count, 1);
+        assert_eq!(list[0].host_call_count, 1);
+
+        // Query detail
+        let req = Request::builder()
+            .method("GET")
+            .uri("/admin/api/v1/traces/0191f6a1-0000-7000-8000-000000000001")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, Some(trace_storage.clone())).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let detail: crate::telemetry::DomainOperationTrace = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(detail.command_id, "0191f6a1-0000-7000-8000-000000000001");
+        assert_eq!(detail.steps[0].host_calls[0].call_type, "db:execute");
+
+        // Query non-existent detail
+        let req = Request::builder()
+            .method("GET")
+            .uri("/admin/api/v1/traces/non-existent")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, Some(trace_storage.clone())).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_http_fluxcell_records_trace() {
+        let mut router = FluxRouter::new();
+        router.register_fluxcell_routes(
+            "vote_cell",
+            "/votes",
+            &[RouteDefinition::new("POST", "/mutate", "Cast vote")],
+        ).unwrap();
+        let router = Arc::new(std::sync::RwLock::new(router));
+
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "worker-http-test".to_string(),
+            "nats".to_string(),
+            None,
+            100,
+        ));
+
+        struct SpanMockDispatcher;
+        #[async_trait::async_trait]
+        impl FluxcellHttpDispatcher for SpanMockDispatcher {
+            async fn dispatch(
+                &self,
+                _fluxcell_name: &str,
+                _relative_path: &str,
+                _method: &str,
+                _headers: Vec<(String, String)>,
+                _body: Vec<u8>,
+            ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), anyhow::Error> {
+                Ok((200, vec![("content-type".to_string(), "application/json".to_string())], b"{\"success\":true}".to_vec()))
+            }
+
+            async fn dispatch_with_spans(
+                &self,
+                _fluxcell_name: &str,
+                _relative_path: &str,
+                _method: &str,
+                _headers: Vec<(String, String)>,
+                _body: Vec<u8>,
+            ) -> Result<(u16, Vec<(String, String)>, Vec<u8>, Vec<crate::telemetry::HostCallSpan>), anyhow::Error> {
+                let spans = vec![
+                    crate::telemetry::HostCallSpan {
+                        call_type: "db:execute".to_string(),
+                        target: "INSERT INTO votes ...".to_string(),
+                        duration_us: 420,
+                        status: "ok".to_string(),
+                        detail: Some("rows: 1".to_string()),
+                    }
+                ];
+                Ok((200, vec![("content-type".to_string(), "application/json".to_string())], b"{\"success\":true}".to_vec(), spans))
+            }
+        }
+
+        let mem_storage = Arc::new(crate::storage::KevyStorage::new_in_memory().unwrap());
+        let trace_storage = Arc::new(crate::telemetry::DomainTraceStorage::new(mem_storage));
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/votes/mutate")
+            .header("x-command-id", "0191f6a1-http-0000-8000-000000000002")
+            .header("x-hlc", "2026-09-17T00:00:00.000Z-0001")
+            .header("content-type", "application/json")
+            .body(Full::new(bytes::Bytes::from(r#"{"operationName":"recordVote","proposalId":"p-999","value":1}"#)))
+            .unwrap();
+
+        let resp = handle_request(
+            req,
+            router.clone(),
+            telemetry.clone(),
+            Arc::new(SpanMockDispatcher),
+            None,
+            Some(trace_storage.clone()),
+        ).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Allow spawned trace recording task to complete
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let trace = trace_storage.get_trace("0191f6a1-http-0000-8000-000000000002").await.unwrap();
+        assert!(trace.is_some(), "Expected trace to be recorded in DomainTraceStorage");
+        let trace = trace.unwrap();
+
+        assert_eq!(trace.command_id, "0191f6a1-http-0000-8000-000000000002");
+        assert_eq!(trace.hlc, "2026-09-17T00:00:00.000Z-0001");
+        assert_eq!(trace.ingress, "HTTP");
+        assert_eq!(trace.topic, "http:/votes/mutate");
+        assert_eq!(trace.operation_name, "recordVote");
+        assert_eq!(trace.status, "completed");
+        assert_eq!(trace.steps.len(), 1);
+        assert_eq!(trace.steps[0].fluxcell_name, "vote_cell");
+        assert_eq!(trace.steps[0].host_calls.len(), 1);
+        assert_eq!(trace.steps[0].host_calls[0].call_type, "db:execute");
     }
 }

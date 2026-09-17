@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to initialize storage engine")?;
     telemetry.record_log("INFO", &format!("Storage backend '{}' ready", config.storage.backend), None);
+    let trace_storage = Arc::new(spectra_flux::telemetry::DomainTraceStorage::new(storage.clone()));
 
     // 3.5. Initialize Database Registry
     let mut db_registry = DatabaseRegistry::new();
@@ -135,9 +136,23 @@ async fn main() -> Result<()> {
                 .with_context(|| format!("Failed to register WASM module '{}'", cell_cfg.wasm_module))?;
 
             if let Some(routes) = wasm_host.get_fluxcell_routes(name) {
+                let route_count = routes.len();
                 router
                     .register_fluxcell_routes(name, &cell_cfg.mount_path, &routes)
                     .with_context(|| format!("Route collision detected for fluxcell '{}'", name))?;
+                log::info!("Registered {} WASM routes for '{}' at '{}'", route_count, name, cell_cfg.mount_path);
+                telemetry.record_log(
+                    "INFO",
+                    &format!("⚡ Fluxcell '{}' is ALIVE: mounted at '{}' with {} WASM route(s)", name, cell_cfg.mount_path, route_count),
+                    None,
+                );
+            } else {
+                log::warn!("No routes exported by WASM fluxcell '{}'", name);
+                telemetry.record_log(
+                    "WARN",
+                    &format!("Fluxcell '{}' loaded but exported 0 routes", name),
+                    None,
+                );
             }
         } else {
             // Built-in fallback routes for out-of-the-box fluxcells
@@ -160,6 +175,11 @@ async fn main() -> Result<()> {
                     .register_fluxcell_routes(name, &cell_cfg.mount_path, &routes)
                     .with_context(|| format!("Route collision detected for fluxcell '{}'", name))?;
                 log::info!("Registered {} built-in routes for fluxcell '{}'", routes.len(), name);
+                telemetry.record_log(
+                    "INFO",
+                    &format!("⚡ Fluxcell '{}' is ALIVE: mounted at '{}' with {} built-in route(s)", name, cell_cfg.mount_path, routes.len()),
+                    None,
+                );
             }
         }
     }
@@ -230,6 +250,8 @@ async fn main() -> Result<()> {
             let dep_broker = deployer.clone();
             let wasm_clone = wasm_host.clone();
             let resilience_clone = config.resilience.clone();
+            let trace_store_clone = trace_storage.clone();
+            let worker_id_broker = worker_id.clone();
             let subjects = vec![
                 "mutation.>".to_string(),
                 "webhook.>".to_string(),
@@ -250,6 +272,43 @@ async fn main() -> Result<()> {
                                 &format!("Processed event id={} topic={}", msg.id, msg.topic),
                                 None,
                             );
+
+                            let start_trace = std::time::Instant::now();
+                            let started_at = chrono::Utc::now().to_rfc3339();
+
+                            let (command_id, hlc, operation_name, initial_input) = if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
+                                let cid = val.pointer("/requestId")
+                                    .or_else(|| val.pointer("/commandId"))
+                                    .or_else(|| val.pointer("/id"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| if !msg.id.is_empty() { msg.id.clone() } else { uuid::Uuid::now_v7().to_string() });
+                                let h = val.pointer("/hlc")
+                                    .map(|v| if v.is_string() { v.as_str().unwrap().to_string() } else { v.to_string() })
+                                    .unwrap_or_else(|| format!("{}", chrono::Utc::now().timestamp_micros()));
+                                let op = val.pointer("/gql/operationName")
+                                    .or_else(|| val.pointer("/operationName"))
+                                    .or_else(|| val.pointer("/operation"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| {
+                                        msg.topic.split('.').last().unwrap_or("unknown").to_string()
+                                    });
+                                let inp = val.pointer("/gql/jsonBody")
+                                    .or_else(|| val.pointer("/gql/variables"))
+                                    .or_else(|| val.pointer("/variables"))
+                                    .or_else(|| val.pointer("/request/gql/jsonBody"))
+                                    .cloned()
+                                    .unwrap_or_else(|| val.clone());
+                                (cid, h, op, inp)
+                            } else {
+                                let cid = if !msg.id.is_empty() { msg.id.clone() } else { uuid::Uuid::now_v7().to_string() };
+                                let h = format!("{}", chrono::Utc::now().timestamp_micros());
+                                let op = msg.topic.split('.').last().unwrap_or("unknown").to_string();
+                                (cid, h, op, serde_json::Value::Null)
+                            };
+
+                            let mut steps: Vec<spectra_flux::telemetry::FluxcellStepSpan> = Vec::new();
 
                             // Handle deployment events
                             if (msg.topic.ends_with("deployfluxcell") || msg.topic == "deployer.deploy") && dep_broker.is_some() {
@@ -321,6 +380,8 @@ async fn main() -> Result<()> {
 
                             // Handle built-in fluxcell event routing
                             if msg.topic.ends_with("requestmagiclink") || msg.topic == "auth.magic_link" {
+                                let step_start = std::time::Instant::now();
+                                let step_start_iso = chrono::Utc::now().to_rfc3339();
                                 let email = if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
                                     val.pointer("/request/gql/jsonBody/variables/email")
                                         .or_else(|| val.pointer("/variables/email"))
@@ -332,7 +393,34 @@ async fn main() -> Result<()> {
                                     "user@example.com".to_string()
                                 };
                                 let token = fluxcell_magic_link::mint_magic_token(&email);
-                                let _ = storage_clone.set(&format!("magic_token:{}", token), &email, 900).await;
+                                let kv_start = std::time::Instant::now();
+                                let kv_res = storage_clone.set(&format!("magic_token:{}", token), &email, 900).await;
+                                let kv_duration_us = kv_start.elapsed().as_micros() as u64;
+
+                                let host_calls = vec![
+                                    spectra_flux::telemetry::HostCallSpan {
+                                        call_type: "kv:set".to_string(),
+                                        target: format!("magic_token:{}", token),
+                                        duration_us: kv_duration_us,
+                                        status: if kv_res.is_ok() { "ok".to_string() } else { "error".to_string() },
+                                        detail: Some(format!("ttl: 900s, email: {}", email)),
+                                    }
+                                ];
+
+                                let step_duration_ms = step_start.elapsed().as_secs_f64() * 1000.0;
+                                steps.push(spectra_flux::telemetry::FluxcellStepSpan {
+                                    fluxcell_name: "magic_link".to_string(),
+                                    topic: msg.topic.clone(),
+                                    function_name: "mint_magic_token".to_string(),
+                                    start_time: step_start_iso,
+                                    duration_ms: step_duration_ms,
+                                    status: "ok".to_string(),
+                                    input_preview: Some(serde_json::json!({ "email": email })),
+                                    output_preview: Some(serde_json::json!({ "status": "minted", "token": token })),
+                                    error: None,
+                                    host_calls,
+                                });
+
                                 tele_clone.record_log(
                                     "INFO",
                                     &format!("Minted magic link token for {} in storage (token: {})", email, token),
@@ -357,38 +445,46 @@ async fn main() -> Result<()> {
                                         .get_fluxcell_offload_strategy(&cell)
                                         .unwrap_or_default();
 
-                                    let res = match offload {
+                                    let step_start = std::time::Instant::now();
+                                    let step_start_iso = chrono::Utc::now().to_rfc3339();
+
+                                    let (res, host_calls) = match offload {
                                         spectra_flux::config::OffloadStrategy::BlockingPool
                                         | spectra_flux::config::OffloadStrategy::DedicatedWorker => {
+                                            let payload_clone = payload_val.clone();
                                             tokio::task::spawn_blocking(move || {
-                                                wasm_exec.invoke_event(&cell, &payload_val)
+                                                wasm_exec.invoke_event_with_spans(&cell, &payload_clone)
                                             })
                                             .await
-                                            .unwrap_or_else(|e| Err(anyhow::anyhow!("Join error: {}", e)))
+                                            .unwrap_or_else(|e| (Err(anyhow::anyhow!("Join error: {}", e)), Vec::new()))
                                         }
                                         spectra_flux::config::OffloadStrategy::Inline => {
-                                            wasm_exec.invoke_event(&cell, &payload_val)
+                                            wasm_exec.invoke_event_with_spans(&cell, &payload_val)
                                         }
                                     };
 
-                                    match res {
+                                    let step_duration_ms = step_start.elapsed().as_secs_f64() * 1000.0;
+
+                                    let (step_status, step_error, output_preview) = match &res {
                                         Ok(r) => {
                                             let status_str = r.get("status").and_then(|s| s.as_str()).unwrap_or("ok");
                                             if status_str == "dead_letter" || status_str == "dead-letter" {
                                                 dlq_requested = true;
                                                 failure_reason = format!("Fluxcell '{}' requested dead_letter: {:?}", cell_name, r.get("error"));
                                                 all_succeeded = false;
-                                                break;
+                                                ("dead_letter".to_string(), Some(failure_reason.clone()), Some(r.clone()))
                                             } else if status_str == "nack" || status_str == "error" {
                                                 all_succeeded = false;
                                                 failure_reason = format!("Fluxcell '{}' returned nack: {:?}", cell_name, r.get("error"));
-                                                break;
+                                                ("error".to_string(), Some(failure_reason.clone()), Some(r.clone()))
+                                            } else {
+                                                tele_exec.record_log(
+                                                    "INFO",
+                                                    &format!("Fluxcell '{}' processed event topic='{}': status={}", cell_name, topic, status_str),
+                                                    None,
+                                                );
+                                                ("ok".to_string(), None, Some(r.clone()))
                                             }
-                                            tele_exec.record_log(
-                                                "INFO",
-                                                &format!("Fluxcell '{}' processed event topic='{}': status={}", cell_name, topic, status_str),
-                                                None,
-                                            );
                                         }
                                         Err(e) => {
                                             all_succeeded = false;
@@ -399,11 +495,60 @@ async fn main() -> Result<()> {
                                                 &format!("Fluxcell '{}' failed to process event topic='{}': {}", cell_name, topic, e),
                                                 None,
                                             );
-                                            break;
+                                            ("error".to_string(), Some(e.to_string()), None)
                                         }
+                                    };
+
+                                    steps.push(spectra_flux::telemetry::FluxcellStepSpan {
+                                        fluxcell_name: cell_name.clone(),
+                                        topic: topic.clone(),
+                                        function_name: "on_event".to_string(),
+                                        start_time: step_start_iso,
+                                        duration_ms: step_duration_ms,
+                                        status: step_status,
+                                        input_preview: Some(payload_val.clone()),
+                                        output_preview,
+                                        error: step_error,
+                                        host_calls,
+                                    });
+
+                                    if !all_succeeded {
+                                        break;
                                     }
                                 }
                             }
+
+                            // Record Domain Operation Trace
+                            let total_duration_ms = start_trace.elapsed().as_secs_f64() * 1000.0;
+                            let completed_at = chrono::Utc::now().to_rfc3339();
+                            let trace_status = if all_succeeded && !dlq_requested {
+                                "completed".to_string()
+                            } else if dlq_requested {
+                                "dlq".to_string()
+                            } else {
+                                "failed".to_string()
+                            };
+
+                            let terminal_output = steps.last().and_then(|s| s.output_preview.clone());
+
+                            let trace = spectra_flux::telemetry::DomainOperationTrace {
+                                command_id,
+                                hlc,
+                                topic: msg.topic.clone(),
+                                operation_name,
+                                ingress: "QUEUE".to_string(),
+                                worker_id: worker_id_broker.clone(),
+                                status: trace_status,
+                                total_duration_ms,
+                                started_at,
+                                completed_at,
+                                initial_input,
+                                steps,
+                                terminal_output,
+                                error: if all_succeeded && !dlq_requested { None } else { Some(failure_reason.clone()) },
+                            };
+
+                            let _ = trace_store_clone.record_trace(&trace).await;
 
                             if all_succeeded && !dlq_requested {
                                 let _ = broker.ack(&msg).await;
@@ -464,11 +609,13 @@ async fn main() -> Result<()> {
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let listener = TcpListener::bind(addr).await?;
     log::info!("🚀 Spectral Flux HTTP Support Server listening on http://{}", addr);
+    telemetry.record_log("INFO", &format!("🚀 Spectral Flux HTTP server listening on http://{}", addr), None);
 
     let router_arc = shared_router.clone();
     let telemetry_arc = telemetry.clone();
     let wasm_dispatcher = wasm_host.clone();
     let deployer_arc = deployer.clone();
+    let trace_storage_arc = trace_storage.clone();
 
     tokio::select! {
         _ = async {
@@ -486,10 +633,18 @@ async fn main() -> Result<()> {
                 let tele_clone = telemetry_arc.clone();
                 let dispatcher_clone = wasm_dispatcher.clone();
                 let deployer_clone = deployer_arc.clone();
+                let trace_storage_clone = trace_storage_arc.clone();
 
                 tokio::spawn(async move {
                     let service = hyper::service::service_fn(move |req| {
-                        handle_request(req, router_clone.clone(), tele_clone.clone(), dispatcher_clone.clone(), deployer_clone.clone())
+                        handle_request(
+                            req,
+                            router_clone.clone(),
+                            tele_clone.clone(),
+                            dispatcher_clone.clone(),
+                            deployer_clone.clone(),
+                            Some(trace_storage_clone.clone()),
+                        )
                     });
 
                     if let Err(err) = ServerBuilder::new(hyper_util::rt::TokioExecutor::new())

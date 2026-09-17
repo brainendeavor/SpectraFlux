@@ -2,6 +2,7 @@
 
 port = 8081
 host = "0.0.0.0"
+gateway_admin_url = "http://127.0.0.1:8000"
 
 [broker]
 method = "nats"
@@ -11,6 +12,18 @@ consumer_group = "spectral-flux-workers"
 [storage]
 backend = "embedded_kevy"
 # addr = "redis://127.0.0.1:6379" # For external Redis/Valkey
+
+[database]
+url = "postgresql://postgres:password@localhost:5432/spectraflux"
+max_connections = 16
+
+# Example user-defined fluxcell:
+# [fluxcells.sample]
+# wasm_module = "fluxcells/sample.wasm"
+# mount_path = "/sample"
+# enabled = false
+# profile = "standard"
+# subscriptions = ["events.sample"]
 
 [fluxcells.magic_link]
 wasm_module = "fluxcells/magic_link.wasm"
