@@ -152,6 +152,7 @@ struct HostState {
     active_transactions: HashMap<u64, Box<dyn crate::db::FluxTx>>,
     next_tx_id: u64,
     current_command_id: Option<String>,
+    active_host_spans: Vec<crate::telemetry::HostCallSpan>,
 }
 
 #[derive(Clone)]
@@ -288,6 +289,7 @@ impl WasmHost {
             active_transactions: HashMap::new(),
             next_tx_id: 1,
             current_command_id: None,
+            active_host_spans: Vec::new(),
         };
         let mut store = Store::new(&self.engine, host_state);
         store.limiter(|s| &mut s.limits);
@@ -420,29 +422,29 @@ impl WasmHost {
         self.fluxcells.read().unwrap().get(name).map(|f| f.config.timeout_ms)
     }
 
-    pub fn invoke_http(
+    pub fn invoke_http_with_spans(
         &self,
         fluxcell_name: &str,
         relative_path: &str,
         method: &str,
         headers: Vec<(String, String)>,
         body: Vec<u8>,
-    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>)> {
-        let fluxcell = self
-            .fluxcells
-            .read()
-            .unwrap()
-            .get(fluxcell_name)
-            .cloned()
-            .ok_or_else(|| anyhow!("Fluxcell '{}' not registered", fluxcell_name))?;
+    ) -> (Result<(u16, Vec<(String, String)>, Vec<u8>)>, Vec<crate::telemetry::HostCallSpan>) {
+        let fluxcell = match self.fluxcells.read().unwrap().get(fluxcell_name).cloned() {
+            Some(c) => c,
+            None => return (Err(anyhow!("Fluxcell '{}' not registered", fluxcell_name)), Vec::new()),
+        };
 
         // 1. Circuit breaker gate
         match fluxcell.circuit_breaker.can_execute() {
             CircuitPermission::Denied => {
-                return Err(anyhow!(
-                    "Fluxcell '{}' circuit breaker is OPEN due to consecutive failures",
-                    fluxcell_name
-                ));
+                return (
+                    Err(anyhow!(
+                        "Fluxcell '{}' circuit breaker is OPEN due to consecutive failures",
+                        fluxcell_name
+                    )),
+                    Vec::new(),
+                );
             }
             CircuitPermission::Allow | CircuitPermission::Probe => {}
         }
@@ -469,7 +471,7 @@ impl WasmHost {
 
         // 4. Execution with epoch timeout
         match self.invoke_guest_json(&fluxcell, "handle_http", &req_json, effective_timeout) {
-            Ok(resp_json) => {
+            (Ok(resp_json), spans) => {
                 fluxcell.circuit_breaker.record_success();
                 let status = resp_json.get("status").and_then(|s| s.as_u64()).unwrap_or(200) as u16;
                 let resp_headers: Vec<(String, String)> = resp_json
@@ -486,13 +488,25 @@ impl WasmHost {
                     _ => Vec::new(),
                 };
 
-                Ok((status, resp_headers, resp_body))
+                (Ok((status, resp_headers, resp_body)), spans)
             }
-            Err(e) => {
+            (Err(e), spans) => {
                 fluxcell.circuit_breaker.record_failure();
-                Err(e)
+                (Err(e), spans)
             }
         }
+    }
+
+    pub fn invoke_http(
+        &self,
+        fluxcell_name: &str,
+        relative_path: &str,
+        method: &str,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>)> {
+        let (res, _) = self.invoke_http_with_spans(fluxcell_name, relative_path, method, headers, body);
+        res
     }
 
     pub fn find_subscribed_fluxcells(&self, topic: &str) -> Vec<String> {
@@ -509,41 +523,53 @@ impl WasmHost {
         matching
     }
 
-    pub fn invoke_event(
+    pub fn invoke_event_with_spans(
         &self,
         fluxcell_name: &str,
         event_payload: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        let fluxcell = self
-            .fluxcells
-            .read()
-            .unwrap()
-            .get(fluxcell_name)
-            .cloned()
-            .ok_or_else(|| anyhow!("Fluxcell '{}' not registered", fluxcell_name))?;
+    ) -> (Result<serde_json::Value>, Vec<crate::telemetry::HostCallSpan>) {
+        let fluxcell = match self.fluxcells.read().unwrap().get(fluxcell_name).cloned() {
+            Some(c) => c,
+            None => return (Err(anyhow!("Fluxcell '{}' not registered", fluxcell_name)), Vec::new()),
+        };
 
         // 1. Circuit breaker gate
         match fluxcell.circuit_breaker.can_execute() {
             CircuitPermission::Denied => {
-                return Err(anyhow!(
-                    "Fluxcell '{}' circuit breaker is OPEN due to consecutive failures",
-                    fluxcell_name
-                ));
+                return (
+                    Err(anyhow!(
+                        "Fluxcell '{}' circuit breaker is OPEN due to consecutive failures",
+                        fluxcell_name
+                    )),
+                    Vec::new(),
+                );
             }
             CircuitPermission::Allow | CircuitPermission::Probe => {}
         }
 
         // 2. Execution with epoch timeout
-        match self.invoke_guest_json(&fluxcell, "handle_event", event_payload, fluxcell.config.timeout_ms) {
-            Ok(res_json) => {
-                fluxcell.circuit_breaker.record_success();
-                Ok(res_json)
-            }
-            Err(e) => {
-                fluxcell.circuit_breaker.record_failure();
-                Err(e)
-            }
+        let (res, spans) = self.invoke_guest_json(
+            &fluxcell,
+            "handle_event",
+            event_payload,
+            fluxcell.config.timeout_ms,
+        );
+
+        match &res {
+            Ok(_) => fluxcell.circuit_breaker.record_success(),
+            Err(_) => fluxcell.circuit_breaker.record_failure(),
         }
+
+        (res, spans)
+    }
+
+    pub fn invoke_event(
+        &self,
+        fluxcell_name: &str,
+        event_payload: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let (res, _) = self.invoke_event_with_spans(fluxcell_name, event_payload);
+        res
     }
 
     fn invoke_guest_json(
@@ -552,7 +578,7 @@ impl WasmHost {
         function_name: &str,
         input: &serde_json::Value,
         timeout_ms: u64,
-    ) -> Result<serde_json::Value> {
+    ) -> (Result<serde_json::Value>, Vec<crate::telemetry::HostCallSpan>) {
         let (mut store, instance) = {
             let mut pool_guard = fluxcell.instance_pool.lock().unwrap();
             match pool_guard.pop() {
@@ -568,6 +594,7 @@ impl WasmHost {
                         active_transactions: HashMap::new(),
                         next_tx_id: 1,
                         current_command_id: None,
+                        active_host_spans: Vec::new(),
                     };
                     let mut store = Store::new(&self.engine, host_state);
                     store.limiter(|s| &mut s.limits);
@@ -575,11 +602,14 @@ impl WasmHost {
                     let deadline_ticks = (timeout_ms / self.epoch_tick_interval_ms.max(1)).max(10);
                     store.set_epoch_deadline(deadline_ticks);
 
-                    let linker = self.create_linker()?;
-                    let instance = linker
-                        .instantiate(&mut store, &fluxcell.module)
-                        .map_err(|e| anyhow!("{:#}", e))
-                        .context("Failed to instantiate WASM module")?;
+                    let linker = match self.create_linker() {
+                        Ok(l) => l,
+                        Err(e) => return (Err(e), Vec::new()),
+                    };
+                    let instance = match linker.instantiate(&mut store, &fluxcell.module) {
+                        Ok(inst) => inst,
+                        Err(e) => return (Err(anyhow!("{:#}", e).context("Failed to instantiate WASM module")), Vec::new()),
+                    };
 
                     (store, instance)
                 }
@@ -595,6 +625,7 @@ impl WasmHost {
             .map(ToString::to_string);
         store.data_mut().current_command_id = cmd_id;
         store.data_mut().storage = self.storage.clone();
+        store.data_mut().active_host_spans.clear();
 
         // Reset epoch timeout ticks for this invocation
         let deadline_ticks = (timeout_ms / self.epoch_tick_interval_ms.max(1)).max(10);
@@ -649,15 +680,17 @@ impl WasmHost {
             serde_json::from_slice(&res_bytes).map_err(|e| anyhow!("Failed to parse guest JSON: {}", e))
         })();
 
+        let spans = std::mem::take(&mut store.data_mut().active_host_spans);
+
         match res {
             Ok(val) => {
                 let mut pool_guard = fluxcell.instance_pool.lock().unwrap();
                 if pool_guard.len() < fluxcell.config.max_instances {
                     pool_guard.push((store, instance));
                 }
-                Ok(val)
+                (Ok(val), spans)
             }
-            Err(e) => Err(e),
+            Err(e) => (Err(e), spans),
         }
     }
 }
@@ -804,14 +837,29 @@ impl crate::http::FluxcellHttpDispatcher for WasmHost {
         headers: Vec<(String, String)>,
         body: Vec<u8>,
     ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), anyhow::Error> {
+        let (status, resp_headers, resp_body, _) = self
+            .dispatch_with_spans(fluxcell_name, relative_path, method, headers, body)
+            .await?;
+        Ok((status, resp_headers, resp_body))
+    }
+
+    async fn dispatch_with_spans(
+        &self,
+        fluxcell_name: &str,
+        relative_path: &str,
+        method: &str,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>, Vec<crate::telemetry::HostCallSpan>), anyhow::Error> {
         let is_registered = self.is_fluxcell_registered(fluxcell_name);
         if !is_registered {
-            return self.dispatch_builtin(fluxcell_name, relative_path, method, headers, body).await;
+            let res = self.dispatch_builtin(fluxcell_name, relative_path, method, headers, body).await?;
+            return Ok((res.0, res.1, res.2, Vec::new()));
         }
 
         let offload = self.get_fluxcell_offload_strategy(fluxcell_name).unwrap_or(crate::config::OffloadStrategy::BlockingPool);
 
-        let res = match offload {
+        let (res, spans) = match offload {
             crate::config::OffloadStrategy::BlockingPool | crate::config::OffloadStrategy::DedicatedWorker => {
                 let host = self.clone();
                 let name = fluxcell_name.to_string();
@@ -820,21 +868,21 @@ impl crate::http::FluxcellHttpDispatcher for WasmHost {
                 let h = headers.clone();
                 let b = body.clone();
                 tokio::task::spawn_blocking(move || {
-                    host.invoke_http(&name, &rel, &m, h, b)
+                    host.invoke_http_with_spans(&name, &rel, &m, h, b)
                 })
                 .await
                 .map_err(|e| anyhow!("Execution worker thread join error: {}", e))?
             }
             crate::config::OffloadStrategy::Inline => {
-                self.invoke_http(fluxcell_name, relative_path, method, headers.clone(), body.clone())
+                self.invoke_http_with_spans(fluxcell_name, relative_path, method, headers.clone(), body.clone())
             }
         };
 
         match res {
-            Ok(r) => Ok(r),
+            Ok(r) => Ok((r.0, r.1, r.2, spans)),
             Err(e) => {
                 match self.dispatch_builtin(fluxcell_name, relative_path, method, headers, body).await {
-                    Ok(builtin_res) => Ok(builtin_res),
+                    Ok(builtin_res) => Ok((builtin_res.0, builtin_res.1, builtin_res.2, spans)),
                     Err(_) => Err(e),
                 }
             }
@@ -894,7 +942,8 @@ impl WasmHost {
                  params_ptr: u32,
                  params_len: u32|
                  -> u64 {
-                    let res: Result<u64> = (|| {
+                    let start = std::time::Instant::now();
+                    let (sql_captured, res): (Option<String>, Result<u64>) = match (|| -> Result<(String, u64)> {
                         let sql = read_string_from_caller(&mut caller, sql_ptr, sql_len)?;
                         let params_json = read_string_from_caller(&mut caller, params_ptr, params_len)?;
                         let params: Vec<serde_json::Value> = if params_json.trim().is_empty() {
@@ -911,8 +960,25 @@ impl WasmHost {
                             .ok_or_else(|| anyhow!("Active transaction handle {} not found", tx_id))?;
                         let result = run_async(tx.execute(&sql, &params));
                         caller.data_mut().active_transactions.insert(tx_id, tx);
-                        result
-                    })();
+                        let rows = result?;
+                        Ok((sql, rows))
+                    })() {
+                        Ok((sql, rows)) => (Some(sql), Ok(rows)),
+                        Err(e) => (None, Err(e)),
+                    };
+
+                    let duration_us = start.elapsed().as_micros() as u64;
+                    let (status, detail, target) = match &res {
+                        Ok(rows) => ("ok", Some(format!("rows affected: {}", rows)), sql_captured.unwrap_or_default()),
+                        Err(e) => ("error", Some(e.to_string()), sql_captured.unwrap_or_default()),
+                    };
+                    caller.data_mut().active_host_spans.push(crate::telemetry::HostCallSpan {
+                        call_type: "db:execute".to_string(),
+                        target,
+                        duration_us,
+                        status: status.to_string(),
+                        detail,
+                    });
 
                     let resp = match res {
                         Ok(rows) => serde_json::json!({ "ok": rows }),
@@ -934,7 +1000,8 @@ impl WasmHost {
                  params_ptr: u32,
                  params_len: u32|
                  -> u64 {
-                    let res: Result<String> = (|| {
+                    let start = std::time::Instant::now();
+                    let (sql_captured, res): (Option<String>, Result<(usize, String)>) = match (|| {
                         let sql = read_string_from_caller(&mut caller, sql_ptr, sql_len)?;
                         let params_json = read_string_from_caller(&mut caller, params_ptr, params_len)?;
                         let params: Vec<serde_json::Value> = if params_json.trim().is_empty() {
@@ -952,11 +1019,29 @@ impl WasmHost {
                         let result = run_async(tx.query(&sql, &params));
                         caller.data_mut().active_transactions.insert(tx_id, tx);
                         let rows = result?;
-                        serde_json::to_string(&rows).context("Failed to serialize query rows to JSON")
-                    })();
+                        let row_count = rows.len();
+                        let json = serde_json::to_string(&rows).context("Failed to serialize query rows to JSON")?;
+                        Ok((sql, row_count, json))
+                    })() {
+                        Ok((sql, count, json)) => (Some(sql), Ok((count, json))),
+                        Err(e) => (None, Err(e)),
+                    };
+
+                    let duration_us = start.elapsed().as_micros() as u64;
+                    let (status, detail, target) = match &res {
+                        Ok((count, _)) => ("ok", Some(format!("rows returned: {}", count)), sql_captured.unwrap_or_default()),
+                        Err(e) => ("error", Some(e.to_string()), sql_captured.unwrap_or_default()),
+                    };
+                    caller.data_mut().active_host_spans.push(crate::telemetry::HostCallSpan {
+                        call_type: "db:query".to_string(),
+                        target,
+                        duration_us,
+                        status: status.to_string(),
+                        detail,
+                    });
 
                     let resp = match res {
-                        Ok(rows_str) => serde_json::json!({ "ok": rows_str }),
+                        Ok((_, rows_str)) => serde_json::json!({ "ok": rows_str }),
                         Err(e) => serde_json::json!({ "err": e.to_string() }),
                     };
                     write_string_to_caller(&mut caller, &resp.to_string()).unwrap_or(0)
@@ -969,6 +1054,7 @@ impl WasmHost {
                 "host_db",
                 "commit_tx",
                 |mut caller: Caller<'_, HostState>, tx_id: u64| -> u64 {
+                    let start = std::time::Instant::now();
                     let res: Result<()> = (|| {
                         let tx = caller
                             .data_mut()
@@ -977,6 +1063,15 @@ impl WasmHost {
                             .ok_or_else(|| anyhow!("Active transaction handle {} not found", tx_id))?;
                         run_async(tx.commit())
                     })();
+                    let duration_us = start.elapsed().as_micros() as u64;
+                    let status = if res.is_ok() { "ok" } else { "error" };
+                    caller.data_mut().active_host_spans.push(crate::telemetry::HostCallSpan {
+                        call_type: "db:commit".to_string(),
+                        target: format!("tx:{}", tx_id),
+                        duration_us,
+                        status: status.to_string(),
+                        detail: None,
+                    });
 
                     let resp = match res {
                         Ok(_) => serde_json::json!({ "ok": null }),
@@ -992,6 +1087,7 @@ impl WasmHost {
                 "host_db",
                 "rollback_tx",
                 |mut caller: Caller<'_, HostState>, tx_id: u64| -> u64 {
+                    let start = std::time::Instant::now();
                     let res: Result<()> = (|| {
                         let tx = caller
                             .data_mut()
@@ -1000,6 +1096,15 @@ impl WasmHost {
                             .ok_or_else(|| anyhow!("Active transaction handle {} not found", tx_id))?;
                         run_async(tx.rollback())
                     })();
+                    let duration_us = start.elapsed().as_micros() as u64;
+                    let status = if res.is_ok() { "ok" } else { "error" };
+                    caller.data_mut().active_host_spans.push(crate::telemetry::HostCallSpan {
+                        call_type: "db:rollback".to_string(),
+                        target: format!("tx:{}", tx_id),
+                        duration_us,
+                        status: status.to_string(),
+                        detail: None,
+                    });
 
                     let resp = match res {
                         Ok(_) => serde_json::json!({ "ok": null }),
@@ -1019,7 +1124,8 @@ impl WasmHost {
                 "checkpoint",
                 "get",
                 |mut caller: Caller<'_, HostState>, step_ptr: u32, step_len: u32| -> u64 {
-                    let res: Result<Option<String>> = (|| {
+                    let start = std::time::Instant::now();
+                    let (key_captured, res): (Option<String>, Result<Option<String>>) = match (|| {
                         let step_name = read_string_from_caller(&mut caller, step_ptr, step_len)?;
                         let storage = caller
                             .data()
@@ -1032,8 +1138,26 @@ impl WasmHost {
                             .clone()
                             .unwrap_or_else(|| "default".to_string());
                         let key = format!("chk:{}:{}", cmd_id, step_name);
-                        run_async(storage.get(&key))
-                    })();
+                        let val = run_async(storage.get(&key))?;
+                        Ok((key, val))
+                    })() {
+                        Ok((k, v)) => (Some(k), Ok(v)),
+                        Err(e) => (None, Err(e)),
+                    };
+
+                    let duration_us = start.elapsed().as_micros() as u64;
+                    let status = match &res {
+                        Ok(Some(_)) => "hit",
+                        Ok(None) => "miss",
+                        Err(_) => "error",
+                    };
+                    caller.data_mut().active_host_spans.push(crate::telemetry::HostCallSpan {
+                        call_type: "checkpoint:get".to_string(),
+                        target: key_captured.unwrap_or_else(|| "checkpoint".to_string()),
+                        duration_us,
+                        status: status.to_string(),
+                        detail: None,
+                    });
 
                     match res {
                         Ok(Some(cached_val)) => {
@@ -1056,7 +1180,8 @@ impl WasmHost {
                  val_len: u32,
                  ttl_seconds: u64|
                  -> u32 {
-                    let res: Result<bool> = (|| {
+                    let start = std::time::Instant::now();
+                    let (key_captured, res): (Option<String>, Result<bool>) = match (|| {
                         let step_name = read_string_from_caller(&mut caller, step_ptr, step_len)?;
                         let val_json = read_string_from_caller(&mut caller, val_ptr, val_len)?;
                         let storage = caller
@@ -1071,8 +1196,25 @@ impl WasmHost {
                             .unwrap_or_else(|| "default".to_string());
                         let key = format!("chk:{}:{}", cmd_id, step_name);
                         let ttl = if ttl_seconds == 0 { 86_400 } else { ttl_seconds };
-                        run_async(storage.set(&key, &val_json, ttl))
-                    })();
+                        let ok = run_async(storage.set(&key, &val_json, ttl))?;
+                        Ok((key, ok))
+                    })() {
+                        Ok((k, ok)) => (Some(k), Ok(ok)),
+                        Err(e) => (None, Err(e)),
+                    };
+
+                    let duration_us = start.elapsed().as_micros() as u64;
+                    let status = match &res {
+                        Ok(true) => "ok",
+                        _ => "error",
+                    };
+                    caller.data_mut().active_host_spans.push(crate::telemetry::HostCallSpan {
+                        call_type: "checkpoint:save".to_string(),
+                        target: key_captured.unwrap_or_else(|| "checkpoint".to_string()),
+                        duration_us,
+                        status: status.to_string(),
+                        detail: Some(format!("ttl: {}s", if ttl_seconds == 0 { 86_400 } else { ttl_seconds })),
+                    });
 
                     match res {
                         Ok(true) => 1,
@@ -1091,15 +1233,34 @@ impl WasmHost {
                 "kv_store",
                 "get",
                 |mut caller: Caller<'_, HostState>, key_ptr: u32, key_len: u32| -> u64 {
-                    let res: Result<Option<String>> = (|| {
+                    let start = std::time::Instant::now();
+                    let (key_captured, res): (Option<String>, Result<Option<String>>) = match (|| {
                         let key = read_string_from_caller(&mut caller, key_ptr, key_len)?;
                         let storage = caller
                             .data()
                             .storage
                             .clone()
                             .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
-                        run_async(storage.get(&key))
-                    })();
+                        let val = run_async(storage.get(&key))?;
+                        Ok((key, val))
+                    })() {
+                        Ok((k, v)) => (Some(k), Ok(v)),
+                        Err(e) => (None, Err(e)),
+                    };
+
+                    let duration_us = start.elapsed().as_micros() as u64;
+                    let status = match &res {
+                        Ok(Some(_)) => "hit",
+                        Ok(None) => "miss",
+                        Err(_) => "error",
+                    };
+                    caller.data_mut().active_host_spans.push(crate::telemetry::HostCallSpan {
+                        call_type: "kv:get".to_string(),
+                        target: key_captured.unwrap_or_else(|| "kv".to_string()),
+                        duration_us,
+                        status: status.to_string(),
+                        detail: None,
+                    });
 
                     match res {
                         Ok(Some(val)) => write_string_to_caller(&mut caller, &val).unwrap_or(0),
@@ -1120,7 +1281,8 @@ impl WasmHost {
                  val_len: u32,
                  ttl_seconds: u64|
                  -> u32 {
-                    let res: Result<bool> = (|| {
+                    let start = std::time::Instant::now();
+                    let (key_captured, res): (Option<String>, Result<bool>) = match (|| {
                         let key = read_string_from_caller(&mut caller, key_ptr, key_len)?;
                         let val = read_string_from_caller(&mut caller, val_ptr, val_len)?;
                         let storage = caller
@@ -1128,8 +1290,25 @@ impl WasmHost {
                             .storage
                             .clone()
                             .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
-                        run_async(storage.set(&key, &val, ttl_seconds))
-                    })();
+                        let ok = run_async(storage.set(&key, &val, ttl_seconds))?;
+                        Ok((key, ok))
+                    })() {
+                        Ok((k, ok)) => (Some(k), Ok(ok)),
+                        Err(e) => (None, Err(e)),
+                    };
+
+                    let duration_us = start.elapsed().as_micros() as u64;
+                    let status = match &res {
+                        Ok(true) => "ok",
+                        _ => "error",
+                    };
+                    caller.data_mut().active_host_spans.push(crate::telemetry::HostCallSpan {
+                        call_type: "kv:set".to_string(),
+                        target: key_captured.unwrap_or_else(|| "kv".to_string()),
+                        duration_us,
+                        status: status.to_string(),
+                        detail: Some(format!("ttl: {}s", ttl_seconds)),
+                    });
 
                     match res {
                         Ok(true) => 1,
@@ -1144,15 +1323,33 @@ impl WasmHost {
                 "kv_store",
                 "delete",
                 |mut caller: Caller<'_, HostState>, key_ptr: u32, key_len: u32| -> u32 {
-                    let res: Result<bool> = (|| {
+                    let start = std::time::Instant::now();
+                    let (key_captured, res): (Option<String>, Result<bool>) = match (|| {
                         let key = read_string_from_caller(&mut caller, key_ptr, key_len)?;
                         let storage = caller
                             .data()
                             .storage
                             .clone()
                             .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
-                        run_async(storage.delete(&key))
-                    })();
+                        let ok = run_async(storage.delete(&key))?;
+                        Ok((key, ok))
+                    })() {
+                        Ok((k, ok)) => (Some(k), Ok(ok)),
+                        Err(e) => (None, Err(e)),
+                    };
+
+                    let duration_us = start.elapsed().as_micros() as u64;
+                    let status = match &res {
+                        Ok(true) => "ok",
+                        _ => "not_found",
+                    };
+                    caller.data_mut().active_host_spans.push(crate::telemetry::HostCallSpan {
+                        call_type: "kv:delete".to_string(),
+                        target: key_captured.unwrap_or_else(|| "kv".to_string()),
+                        duration_us,
+                        status: status.to_string(),
+                        detail: None,
+                    });
 
                     match res {
                         Ok(true) => 1,

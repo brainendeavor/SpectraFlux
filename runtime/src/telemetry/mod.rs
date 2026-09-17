@@ -5,6 +5,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+pub mod trace;
+pub use trace::{DomainOperationTrace, DomainTraceStorage, FluxcellStepSpan, HostCallSpan, RecentTraceSummary};
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerLogEntry {
