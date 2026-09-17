@@ -17,7 +17,9 @@ function unpackString(packed: u64): string | null {
   const ptr = (packed >> 32) as usize;
   const len = (packed & 0xffffffff) as usize;
   if (len == 0) return "";
-  return String.UTF8.decodeUnsafe(ptr, len);
+  const str = String.UTF8.decodeUnsafe(ptr, len);
+  heap.free(ptr);
+  return str;
 }
 
 /**

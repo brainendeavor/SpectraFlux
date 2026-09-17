@@ -56,10 +56,12 @@ export function evaluate_causality(incoming: string, existing: string): CausalVe
 export class CausalGuard {
   private capacity: i32;
   private watermarks: Map<string, string>;
+  private keys: Array<string>;
 
   constructor(capacity: i32 = 1000) {
     this.capacity = capacity;
     this.watermarks = new Map<string, string>();
+    this.keys = new Array<string>();
   }
 
   /**
@@ -75,10 +77,14 @@ export class CausalGuard {
       if (!is_fresh(verdict)) {
         return verdict;
       }
-    }
-
-    if (this.watermarks.size >= this.capacity) {
-      this.watermarks.clear();
+    } else {
+      if (this.watermarks.size >= this.capacity) {
+        if (this.keys.length > 0) {
+          const oldest = this.keys.shift();
+          this.watermarks.delete(oldest);
+        }
+      }
+      this.keys.push(key);
     }
 
     this.watermarks.set(key, incomingHlc);
@@ -94,6 +100,7 @@ export class CausalGuard {
 
   clear(): void {
     this.watermarks.clear();
+    this.keys = new Array<string>();
   }
 
   size(): i32 {
@@ -152,7 +159,11 @@ export function advance_db_watermark(
     "VALUES ($1, $2, $3, NOW()) " +
     "ON CONFLICT (namespace, entity_id) DO UPDATE " +
     "SET hlc = EXCLUDED.hlc, updated_at = NOW() " +
-    "WHERE _flux_causal_watermarks.hlc < EXCLUDED.hlc";
+    "WHERE CASE WHEN _flux_causal_watermarks.hlc LIKE '%.%' AND EXCLUDED.hlc LIKE '%.%' THEN " +
+    "(split_part(_flux_causal_watermarks.hlc, '.', 1)::bigint < split_part(EXCLUDED.hlc, '.', 1)::bigint OR " +
+    "(split_part(_flux_causal_watermarks.hlc, '.', 1)::bigint = split_part(EXCLUDED.hlc, '.', 1)::bigint AND " +
+    "split_part(_flux_causal_watermarks.hlc, '.', 2)::bigint < split_part(EXCLUDED.hlc, '.', 2)::bigint)) " +
+    "ELSE _flux_causal_watermarks.hlc < EXCLUDED.hlc END";
 
   const upsertParams = '["' + namespace + '","' + entityId + '","' + incomingHlc + '"]';
   tx.execute(upsertSql, upsertParams);

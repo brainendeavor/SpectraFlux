@@ -18,10 +18,12 @@ export class DeduplicationEntry<V> {
 export class DeduplicationBuffer<V> {
   private capacity: i32;
   private entries: Map<string, DeduplicationEntry<V>>;
+  private keys: Array<string>;
 
   constructor(capacity: i32 = 1000) {
     this.capacity = capacity;
     this.entries = new Map<string, DeduplicationEntry<V>>();
+    this.keys = new Array<string>();
   }
 
   /**
@@ -36,10 +38,14 @@ export class DeduplicationBuffer<V> {
       if (is_stale(hlc, existing.hlc)) {
         return false;
       }
-    }
-
-    if (this.entries.size >= this.capacity) {
-      this.entries.clear();
+    } else {
+      if (this.entries.size >= this.capacity) {
+        if (this.keys.length > 0) {
+          const oldest = this.keys.shift();
+          this.entries.delete(oldest);
+        }
+      }
+      this.keys.push(key);
     }
 
     this.entries.set(key, new DeduplicationEntry<V>(hlc, val));
@@ -58,6 +64,7 @@ export class DeduplicationBuffer<V> {
 
   clear(): void {
     this.entries.clear();
+    this.keys = new Array<string>();
   }
 
   size(): i32 {

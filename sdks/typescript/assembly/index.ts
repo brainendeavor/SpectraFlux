@@ -9,5 +9,6 @@ export * from "./telemetry";
 export * from "./dedup";
 export * from "./causal";
 export * from "./checkpoint";
+export * from "./broker";
 export * from "./abi";
 

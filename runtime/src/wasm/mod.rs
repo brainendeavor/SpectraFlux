@@ -54,14 +54,14 @@ impl WasmCircuitBreaker {
     }
 
     pub fn can_execute(&self) -> CircuitPermission {
-        let current_state = *self.state.read().unwrap();
+        let current_state = *self.state.read().unwrap_or_else(|e| e.into_inner());
         match current_state {
             CircuitState::Closed => CircuitPermission::Allow,
             CircuitState::Open => {
-                let tripped_at = *self.last_tripped_at.read().unwrap();
+                let tripped_at = *self.last_tripped_at.read().unwrap_or_else(|e| e.into_inner());
                 if let Some(t) = tripped_at {
                     if t.elapsed() >= self.config.cooloff_duration {
-                        let mut state_lock = self.state.write().unwrap();
+                        let mut state_lock = self.state.write().unwrap_or_else(|e| e.into_inner());
                         if *state_lock == CircuitState::Open {
                             *state_lock = CircuitState::HalfOpen;
                             self.probing.store(true, Ordering::SeqCst);
@@ -88,7 +88,7 @@ impl WasmCircuitBreaker {
     pub fn record_success(&self) {
         self.failures.store(0, Ordering::Relaxed);
         self.probing.store(false, Ordering::SeqCst);
-        let mut state_lock = self.state.write().unwrap();
+        let mut state_lock = self.state.write().unwrap_or_else(|e| e.into_inner());
         *state_lock = CircuitState::Closed;
     }
 
@@ -96,18 +96,18 @@ impl WasmCircuitBreaker {
         self.probing.store(false, Ordering::SeqCst);
         let prev = self.failures.fetch_add(1, Ordering::Relaxed);
         let failures = prev + 1;
-        let mut state_lock = self.state.write().unwrap();
+        let mut state_lock = self.state.write().unwrap_or_else(|e| e.into_inner());
         if *state_lock == CircuitState::HalfOpen
             || failures >= self.config.consecutive_failure_threshold
         {
             *state_lock = CircuitState::Open;
-            let mut tripped_lock = self.last_tripped_at.write().unwrap();
+            let mut tripped_lock = self.last_tripped_at.write().unwrap_or_else(|e| e.into_inner());
             *tripped_lock = Some(Instant::now());
         }
     }
 
     pub fn is_open(&self) -> bool {
-        *self.state.read().unwrap() == CircuitState::Open
+        *self.state.read().unwrap_or_else(|e| e.into_inner()) == CircuitState::Open
     }
 }
 
@@ -149,6 +149,7 @@ struct HostState {
     limits: StoreLimits,
     storage: Option<Arc<dyn crate::storage::FluxStorage>>,
     db_registry: Option<Arc<crate::db::DatabaseRegistry>>,
+    broker: Option<Arc<dyn crate::broker::BrokerConsumerAdapter>>,
     active_transactions: HashMap<u64, Box<dyn crate::db::FluxTx>>,
     next_tx_id: u64,
     current_command_id: Option<String>,
@@ -164,6 +165,7 @@ pub struct WasmHost {
     #[allow(dead_code)]
     storage: Option<Arc<dyn crate::storage::FluxStorage>>,
     db_registry: Option<Arc<crate::db::DatabaseRegistry>>,
+    broker: Option<Arc<dyn crate::broker::BrokerConsumerAdapter>>,
 }
 
 impl WasmHost {
@@ -178,6 +180,15 @@ impl WasmHost {
         epoch_tick_interval_ms: u64,
         storage: Option<Arc<dyn crate::storage::FluxStorage>>,
         db_registry: Option<Arc<crate::db::DatabaseRegistry>>,
+    ) -> Result<Self> {
+        Self::with_capabilities(epoch_tick_interval_ms, storage, db_registry, None)
+    }
+
+    pub fn with_capabilities(
+        epoch_tick_interval_ms: u64,
+        storage: Option<Arc<dyn crate::storage::FluxStorage>>,
+        db_registry: Option<Arc<crate::db::DatabaseRegistry>>,
+        broker: Option<Arc<dyn crate::broker::BrokerConsumerAdapter>>,
     ) -> Result<Self> {
         let mut config = Config::new();
         config.epoch_interruption(true);
@@ -209,7 +220,13 @@ impl WasmHost {
             fluxcells: Arc::new(RwLock::new(HashMap::new())),
             storage,
             db_registry,
+            broker,
         })
+    }
+
+    pub fn with_broker(mut self, broker: Option<Arc<dyn crate::broker::BrokerConsumerAdapter>>) -> Self {
+        self.broker = broker;
+        self
     }
 
     pub fn engine(&self) -> &Engine {
@@ -265,7 +282,7 @@ impl WasmHost {
 
         self.fluxcells
             .write()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(name.to_string(), Arc::new(reg));
         Ok(())
     }
@@ -286,6 +303,7 @@ impl WasmHost {
             limits,
             storage: self.storage.clone(),
             db_registry: self.db_registry.clone(),
+            broker: self.broker.clone(),
             active_transactions: HashMap::new(),
             next_tx_id: 1,
             current_command_id: None,
@@ -298,46 +316,54 @@ impl WasmHost {
         let deadline_ticks = (config.timeout_ms / self.epoch_tick_interval_ms.max(1)).max(10);
         store.set_epoch_deadline(deadline_ticks);
 
-        if let Ok(linker) = self.create_linker() {
-            if let Ok(instance) = linker.instantiate(&mut store, module) {
-            // Attempt to query get_subscriptions
-            if let Ok(func) = instance.get_typed_func::<(), u64>(&mut store, "get_subscriptions") {
-                if let Ok(packed) = func.call(&mut store, ()) {
-                    if let Ok(json_str) = self.read_guest_memory_string(&mut store, &instance, packed) {
-                        if let Ok(subs) = serde_json::from_str::<Vec<String>>(&json_str) {
-                            subscriptions = subs;
+        match self.create_linker() {
+            Ok(linker) => match linker.instantiate(&mut store, module) {
+                Ok(instance) => {
+                    // Attempt to query get_subscriptions
+                    if let Ok(func) = instance.get_typed_func::<(), u64>(&mut store, "get_subscriptions") {
+                        if let Ok(packed) = func.call(&mut store, ()) {
+                            if let Ok(json_str) = self.read_guest_memory_string(&mut store, &instance, packed) {
+                                if let Ok(subs) = serde_json::from_str::<Vec<String>>(&json_str) {
+                                    subscriptions = subs;
+                                }
+                            }
                         }
                     }
-                }
-            }
 
-            // Attempt to query get_routes
-            if let Ok(func) = instance.get_typed_func::<(), u64>(&mut store, "get_routes") {
-                if let Ok(packed) = func.call(&mut store, ()) {
-                    if let Ok(json_str) = self.read_guest_memory_string(&mut store, &instance, packed) {
-                        #[derive(serde::Deserialize)]
-                        struct RouteMeta {
-                            method: String,
-                            path: String,
-                            description: String,
-                            #[serde(default)]
-                            timeout_ms: Option<u64>,
-                        }
-                        if let Ok(r_list) = serde_json::from_str::<Vec<RouteMeta>>(&json_str) {
-                            routes = r_list
-                                .into_iter()
-                                .map(|r| crate::http::RouteDefinition {
-                                    method: r.method,
-                                    relative_path: r.path,
-                                    description: r.description,
-                                    timeout_ms: r.timeout_ms,
-                                })
-                                .collect();
+                    // Attempt to query get_routes
+                    if let Ok(func) = instance.get_typed_func::<(), u64>(&mut store, "get_routes") {
+                        if let Ok(packed) = func.call(&mut store, ()) {
+                            if let Ok(json_str) = self.read_guest_memory_string(&mut store, &instance, packed) {
+                                #[derive(serde::Deserialize)]
+                                struct RouteMeta {
+                                    method: String,
+                                    path: String,
+                                    description: String,
+                                    #[serde(default)]
+                                    timeout_ms: Option<u64>,
+                                }
+                                if let Ok(r_list) = serde_json::from_str::<Vec<RouteMeta>>(&json_str) {
+                                    routes = r_list
+                                        .into_iter()
+                                        .map(|r| crate::http::RouteDefinition {
+                                            method: r.method,
+                                            relative_path: r.path,
+                                            description: r.description,
+                                            timeout_ms: r.timeout_ms,
+                                        })
+                                        .collect();
+                                }
+                            }
                         }
                     }
                 }
+                Err(e) => {
+                    log::warn!("query_module_reflection: failed to instantiate module: {:#}", e);
+                }
+            },
+            Err(e) => {
+                log::warn!("query_module_reflection: failed to create linker: {:#}", e);
             }
-        }
         }
 
         Ok((subscriptions, routes))
@@ -368,13 +394,18 @@ impl WasmHost {
         let mut bytes = vec![0u8; len];
         memory.read(&*store, ptr, &mut bytes)
             .map_err(|e| anyhow!("{:#}", e))?;
+
+        if let Ok(dealloc_fn) = instance.get_typed_func::<(u32, u32), ()>(&mut *store, "deallocate") {
+            let _ = dealloc_fn.call(&mut *store, (ptr as u32, len as u32));
+        }
+
         String::from_utf8(bytes).map_err(|e| anyhow!("Invalid UTF-8 from guest: {}", e))
     }
 
     pub fn get_fluxcell_routes(&self, name: &str) -> Option<Vec<crate::http::RouteDefinition>> {
         self.fluxcells
             .read()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .get(name)
             .map(|f| f.routes.clone())
     }
@@ -382,7 +413,7 @@ impl WasmHost {
     pub fn get_fluxcell_subscriptions(&self, name: &str) -> Option<Vec<String>> {
         self.fluxcells
             .read()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .get(name)
             .map(|f| f.subscriptions.clone())
     }
@@ -390,36 +421,36 @@ impl WasmHost {
     pub fn is_circuit_open(&self, name: &str) -> bool {
         self.fluxcells
             .read()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .get(name)
             .map(|f| f.circuit_breaker.is_open())
             .unwrap_or(false)
     }
 
     pub fn unregister_fluxcell(&self, name: &str) -> bool {
-        self.fluxcells.write().unwrap().remove(name).is_some()
+        self.fluxcells.write().unwrap_or_else(|e| e.into_inner()).remove(name).is_some()
     }
 
     pub fn list_registered_fluxcells(&self) -> Vec<String> {
-        let mut list: Vec<String> = self.fluxcells.read().unwrap().keys().cloned().collect();
+        let mut list: Vec<String> = self.fluxcells.read().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
         list.sort();
         list
     }
 
     pub fn is_fluxcell_registered(&self, name: &str) -> bool {
-        self.fluxcells.read().unwrap().contains_key(name)
+        self.fluxcells.read().unwrap_or_else(|e| e.into_inner()).contains_key(name)
     }
 
     pub fn get_fluxcell_offload_strategy(&self, name: &str) -> Option<crate::config::OffloadStrategy> {
-        self.fluxcells.read().unwrap().get(name).map(|f| f.config.offload)
+        self.fluxcells.read().unwrap_or_else(|e| e.into_inner()).get(name).map(|f| f.config.offload)
     }
 
     pub fn get_fluxcell_profile(&self, name: &str) -> Option<String> {
-        self.fluxcells.read().unwrap().get(name).map(|f| f.config.profile.clone())
+        self.fluxcells.read().unwrap_or_else(|e| e.into_inner()).get(name).map(|f| f.config.profile.clone())
     }
 
     pub fn get_fluxcell_timeout_ms(&self, name: &str) -> Option<u64> {
-        self.fluxcells.read().unwrap().get(name).map(|f| f.config.timeout_ms)
+        self.fluxcells.read().unwrap_or_else(|e| e.into_inner()).get(name).map(|f| f.config.timeout_ms)
     }
 
     pub fn invoke_http_with_spans(
@@ -430,7 +461,7 @@ impl WasmHost {
         headers: Vec<(String, String)>,
         body: Vec<u8>,
     ) -> (Result<(u16, Vec<(String, String)>, Vec<u8>)>, Vec<crate::telemetry::HostCallSpan>) {
-        let fluxcell = match self.fluxcells.read().unwrap().get(fluxcell_name).cloned() {
+        let fluxcell = match self.fluxcells.read().unwrap_or_else(|e| e.into_inner()).get(fluxcell_name).cloned() {
             Some(c) => c,
             None => return (Err(anyhow!("Fluxcell '{}' not registered", fluxcell_name)), Vec::new()),
         };
@@ -510,7 +541,7 @@ impl WasmHost {
     }
 
     pub fn find_subscribed_fluxcells(&self, topic: &str) -> Vec<String> {
-        let cells = self.fluxcells.read().unwrap();
+        let cells = self.fluxcells.read().unwrap_or_else(|e| e.into_inner());
         let mut matching = Vec::new();
         for (name, cell) in cells.iter() {
             for sub in &cell.subscriptions {
@@ -528,7 +559,7 @@ impl WasmHost {
         fluxcell_name: &str,
         event_payload: &serde_json::Value,
     ) -> (Result<serde_json::Value>, Vec<crate::telemetry::HostCallSpan>) {
-        let fluxcell = match self.fluxcells.read().unwrap().get(fluxcell_name).cloned() {
+        let fluxcell = match self.fluxcells.read().unwrap_or_else(|e| e.into_inner()).get(fluxcell_name).cloned() {
             Some(c) => c,
             None => return (Err(anyhow!("Fluxcell '{}' not registered", fluxcell_name)), Vec::new()),
         };
@@ -580,7 +611,7 @@ impl WasmHost {
         timeout_ms: u64,
     ) -> (Result<serde_json::Value>, Vec<crate::telemetry::HostCallSpan>) {
         let (mut store, instance) = {
-            let mut pool_guard = fluxcell.instance_pool.lock().unwrap();
+            let mut pool_guard = fluxcell.instance_pool.lock().unwrap_or_else(|e| e.into_inner());
             match pool_guard.pop() {
                 Some(pair) => pair,
                 None => {
@@ -591,6 +622,7 @@ impl WasmHost {
                         limits,
                         storage: self.storage.clone(),
                         db_registry: self.db_registry.clone(),
+                        broker: self.broker.clone(),
                         active_transactions: HashMap::new(),
                         next_tx_id: 1,
                         current_command_id: None,
@@ -676,6 +708,7 @@ impl WasmHost {
 
             let mut res_bytes = vec![0u8; res_len];
             memory.read(&store, res_ptr, &mut res_bytes).map_err(|e| anyhow!("{:#}", e))?;
+            let _ = dealloc_fn.call(&mut store, (res_ptr as u32, res_len as u32));
 
             serde_json::from_slice(&res_bytes).map_err(|e| anyhow!("Failed to parse guest JSON: {}", e))
         })();
@@ -684,8 +717,12 @@ impl WasmHost {
 
         match res {
             Ok(val) => {
-                let mut pool_guard = fluxcell.instance_pool.lock().unwrap();
+                let mut pool_guard = fluxcell.instance_pool.lock().unwrap_or_else(|e| e.into_inner());
                 if pool_guard.len() < fluxcell.config.max_instances {
+                    store.data_mut().active_transactions.clear();
+                    store.data_mut().next_tx_id = 1;
+                    store.data_mut().current_command_id = None;
+                    store.data_mut().active_host_spans.clear();
                     pool_guard.push((store, instance));
                 }
                 (Ok(val), spans)
@@ -893,10 +930,31 @@ impl crate::http::FluxcellHttpDispatcher for WasmHost {
 impl WasmHost {
     fn create_linker(&self) -> Result<Linker<HostState>> {
         let mut linker = Linker::new(&self.engine);
+        self.bind_host_env(&mut linker)?;
         self.bind_host_db(&mut linker)?;
         self.bind_host_checkpoint(&mut linker)?;
         self.bind_host_kv(&mut linker)?;
+        self.bind_host_broker(&mut linker)?;
         Ok(linker)
+    }
+
+    fn bind_host_env(&self, linker: &mut Linker<HostState>) -> Result<()> {
+        linker
+            .func_wrap(
+                "env",
+                "abort",
+                |_caller: Caller<'_, HostState>, msg_ptr: u32, file_ptr: u32, line: u32, col: u32| {
+                    log::error!(
+                        "Guest abort triggered: msg_ptr={}, file_ptr={}, line={}, col={}",
+                        msg_ptr,
+                        file_ptr,
+                        line,
+                        col
+                    );
+                },
+            )
+            .map_err(|e| anyhow!("{:#}", e))?;
+        Ok(())
     }
 
     fn bind_host_db(&self, linker: &mut Linker<HostState>) -> Result<()> {
@@ -1359,6 +1417,50 @@ impl WasmHost {
             )
             .map_err(|e| anyhow!("{:#}", e))?;
 
+        Ok(())
+    }
+
+    fn bind_host_broker(&self, linker: &mut Linker<HostState>) -> Result<()> {
+        let handler = |mut caller: Caller<'_, HostState>,
+                       topic_ptr: u32,
+                       topic_len: u32,
+                       payload_ptr: u32,
+                       payload_len: u32|
+         -> u32 {
+            let start = std::time::Instant::now();
+            let mut captured_topic = None;
+            let res: Result<()> = (|| {
+                let topic = read_string_from_caller(&mut caller, topic_ptr, topic_len)?;
+                captured_topic = Some(topic.clone());
+                let payload = read_string_from_caller(&mut caller, payload_ptr, payload_len)?;
+                let broker = caller
+                    .data()
+                    .broker
+                    .clone()
+                    .ok_or_else(|| anyhow!("No broker configured on this chassis"))?;
+                run_async(broker.publish(&topic, payload.as_bytes()))?;
+                Ok(())
+            })();
+
+            let duration_us = start.elapsed().as_micros() as u64;
+            let status = if res.is_ok() { "ok" } else { "error" };
+            caller.data_mut().active_host_spans.push(crate::telemetry::HostCallSpan {
+                call_type: "host_broker:publish".to_string(),
+                target: captured_topic.unwrap_or_else(|| "broker".to_string()),
+                duration_us,
+                status: status.to_string(),
+                detail: None,
+            });
+
+            if res.is_ok() { 1 } else { 0 }
+        };
+
+        linker
+            .func_wrap("host_broker", "publish", handler)
+            .map_err(|e| anyhow!("{:#}", e))?;
+        linker
+            .func_wrap("host-broker", "publish", handler)
+            .map_err(|e| anyhow!("{:#}", e))?;
         Ok(())
     }
 }

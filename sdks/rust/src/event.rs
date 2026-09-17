@@ -98,7 +98,9 @@ pub mod checkpoint {
             let ptr = (packed >> 32) as usize;
             let len = (packed & 0xFFFF_FFFF) as usize;
             let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
-            String::from_utf8(slice.to_vec()).ok()
+            let res = String::from_utf8(slice.to_vec()).ok();
+            crate::abi::deallocate(ptr as *mut u8, len);
+            res
         }
         #[cfg(not(target_arch = "wasm32"))]
         {

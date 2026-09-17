@@ -5,6 +5,7 @@
 //! and the `export_fluxcell!` entrypoint macro.
 
 pub mod abi;
+pub mod broker;
 pub mod causal;
 pub mod db;
 pub mod dedup;

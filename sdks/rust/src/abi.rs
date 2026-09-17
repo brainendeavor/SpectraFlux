@@ -3,7 +3,27 @@
 //! Provides deterministic string and byte packing, pointer conversion,
 //! and buffer lifetime protection across the WASM guest/host boundary.
 
-static mut LAST_ALLOC: Option<Vec<u8>> = None;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_mock {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static NATIVE_ALLOCS: Mutex<Option<HashMap<u32, Vec<u8>>>> = Mutex::new(None);
+    static NEXT_ID: AtomicU32 = AtomicU32::new(1);
+
+    pub fn store(bytes: Vec<u8>) -> u32 {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let mut guard = NATIVE_ALLOCS.lock().unwrap_or_else(|e| e.into_inner());
+        guard.get_or_insert_with(HashMap::new).insert(id, bytes);
+        id
+    }
+
+    pub fn fetch_and_remove(id: u32) -> Option<Vec<u8>> {
+        let mut guard = NATIVE_ALLOCS.lock().unwrap_or_else(|e| e.into_inner());
+        guard.as_mut().and_then(|m| m.remove(&id))
+    }
+}
 
 /// Allocates a contiguous memory buffer inside the guest memory space.
 pub fn allocate(size: usize) -> *mut u8 {
@@ -16,25 +36,32 @@ pub fn allocate(size: usize) -> *mut u8 {
 /// Frees a previously allocated guest memory buffer.
 pub fn deallocate(ptr: *mut u8, size: usize) {
     if !ptr.is_null() && size > 0 {
-        unsafe { drop(Vec::from_raw_parts(ptr, 0, size)) };
+        unsafe { drop(Vec::from_raw_parts(ptr, size, size)) };
     }
 }
 
 /// Packs a String into a 64-bit integer encoding: `(ptr << 32) | (len & 0xFFFF_FFFF)`.
-/// Retains the allocation in `LAST_ALLOC` so the host can safely read it.
 pub fn pack_string(s: String) -> u64 {
     pack_bytes(s.into_bytes())
 }
 
 /// Packs a byte buffer into a 64-bit integer encoding: `(ptr << 32) | (len & 0xFFFF_FFFF)`.
+#[cfg(target_arch = "wasm32")]
+pub fn pack_bytes(bytes: Vec<u8>) -> u64 {
+    let mut bytes = bytes;
+    bytes.shrink_to_fit();
+    let len = bytes.len() as u64;
+    let ptr = bytes.as_mut_ptr() as usize as u64;
+    std::mem::forget(bytes);
+    ((ptr & 0xFFFF_FFFF) << 32) | (len & 0xFFFF_FFFF)
+}
+
+/// Packs a byte buffer into a 64-bit integer encoding for native unit test mocking.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn pack_bytes(bytes: Vec<u8>) -> u64 {
     let len = bytes.len() as u64;
-    let ptr = bytes.as_ptr() as usize as u64;
-    unsafe {
-        LAST_ALLOC = Some(bytes);
-    }
-    // On 32-bit WASM, (ptr as u32 as u64) fits within the high 32 bits
-    ((ptr & 0xFFFF_FFFF) << 32) | (len & 0xFFFF_FFFF)
+    let id = native_mock::store(bytes) as u64;
+    (id << 32) | (len & 0xFFFF_FFFF)
 }
 
 /// Unpacks a string from raw guest memory pointer and length.
@@ -69,19 +96,20 @@ pub fn read_guest_string(packed: u64) -> String {
     }
     unsafe {
         let slice = std::slice::from_raw_parts(ptr as *const u8, len);
-        String::from_utf8_lossy(slice).to_string()
+        let s = String::from_utf8_lossy(slice).to_string();
+        deallocate(ptr as *mut u8, len);
+        s
     }
 }
 
-/// On native 64-bit platforms (during unit tests), resolves directly from `LAST_ALLOC`.
+/// On native 64-bit platforms (during unit tests), resolves safely from `NATIVE_ALLOCS`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_guest_string(_packed: u64) -> String {
-    unsafe {
-        if let Some(ref bytes) = LAST_ALLOC {
-            String::from_utf8_lossy(bytes).to_string()
-        } else {
-            String::new()
-        }
+pub fn read_guest_string(packed: u64) -> String {
+    let id = (packed >> 32) as u32;
+    if let Some(bytes) = native_mock::fetch_and_remove(id) {
+        String::from_utf8_lossy(&bytes).to_string()
+    } else {
+        String::new()
     }
 }
 

@@ -1,8 +1,10 @@
-use http_body_util::{BodyExt, Full};
-use hyper::{Request, Response, StatusCode};
+use http_body_util::Full;
+use hyper::{Request, Response};
 use matchit::Router;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+pub mod handlers;
 
 pub const ADMIN_HTML: &str = include_str!("assets/admin.html");
 
@@ -371,704 +373,77 @@ where
         raw_path
     };
 
-    // 1. Built-in liveness / readiness probes
+    // 1. Probes
     if path == "/healthz" {
-        let uptime = telemetry.started_at.elapsed().as_secs();
-        let body = serde_json::json!({
-            "status": "ok",
-            "uptime_seconds": uptime,
-            "processed_events": telemetry.processed_events.load(std::sync::atomic::Ordering::Relaxed),
-            "errors": telemetry.error_count.load(std::sync::atomic::Ordering::Relaxed),
-        });
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "application/json")
-            .body(Full::new(bytes::Bytes::from(body.to_string())))
-            .unwrap());
+        return Ok(handlers::probes::handle_healthz(&telemetry));
     }
-
     if path == "/readyz" {
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "application/json")
-            .body(Full::new(bytes::Bytes::from("{\"status\":\"ready\"}")))
-            .unwrap());
+        return Ok(handlers::probes::handle_readyz());
     }
-
     if path == "/metrics" || path == "/admin/api/v1/metrics" {
-        let uptime = telemetry.started_at.elapsed().as_secs();
-        let body = serde_json::json!({
-            "worker_id": telemetry.worker_id,
-            "uptime_seconds": uptime,
-            "processed_events": telemetry.processed_events.load(std::sync::atomic::Ordering::Relaxed),
-            "errors": telemetry.error_count.load(std::sync::atomic::Ordering::Relaxed),
-        });
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "application/json")
-            .body(Full::new(bytes::Bytes::from(body.to_string())))
-            .unwrap());
+        return Ok(handlers::probes::handle_metrics(&telemetry));
     }
 
+    // 2. Admin & Observability
     if path == "/admin/logs" || path == "/admin/api/v1/logs" {
-        let logs = telemetry.get_recent_logs();
-        let body = serde_json::to_string(&logs).unwrap_or_else(|_| "[]".to_string());
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "application/json")
-            .body(Full::new(bytes::Bytes::from(body)))
-            .unwrap());
+        return Ok(handlers::admin::handle_logs(&telemetry));
     }
-
-    // Live Logs Admin Dashboard UI
     if path == "/admin" || path == "/admin/" || path == "/dashboard" {
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "text/html; charset=utf-8")
-            .body(Full::new(bytes::Bytes::from(ADMIN_HTML)))
-            .unwrap());
+        return Ok(handlers::admin::handle_dashboard());
     }
-
-    // Live Logs Admin Overview API
     if path == "/admin/api/v1/overview" {
-        let uptime = telemetry.started_at.elapsed().as_secs();
-        let processed = telemetry.processed_events.load(std::sync::atomic::Ordering::Relaxed);
-        let errors = telemetry.error_count.load(std::sync::atomic::Ordering::Relaxed);
-        let cells = {
-            let r = router.read().unwrap();
-            r.get_fluxcells_summary()
-        };
-        let body = serde_json::json!({
-            "workerId": telemetry.worker_id,
-            "uptimeSeconds": uptime,
-            "processedEvents": processed,
-            "errors": errors,
-            "fluxcells": cells,
-        });
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "application/json")
-            .body(Full::new(bytes::Bytes::from(body.to_string())))
-            .unwrap());
+        return Ok(handlers::admin::handle_overview(&telemetry, &router));
     }
-
-    // Domain Operation Traces API
     if path == "/admin/api/v1/traces" && method == "GET" {
-        if let Some(ts) = &trace_storage {
-            let limit = query_string
-                .as_ref()
-                .and_then(|q| {
-                    for param in q.split('&') {
-                        let mut kv = param.split('=');
-                        if let (Some("limit"), Some(v)) = (kv.next(), kv.next()) {
-                            return v.parse::<usize>().ok();
-                        }
-                    }
-                    None
-                })
-                .unwrap_or(50);
-
-            let summaries = ts.list_recent_traces(limit).await.unwrap_or_default();
-            let body = serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".to_string());
-            return Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from(body)))
-                .unwrap());
-        } else {
-            return Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from("[]")))
-                .unwrap());
-        }
+        return Ok(handlers::admin::handle_traces(trace_storage.as_ref(), query_string.as_deref()).await);
     }
-
     if path.starts_with("/admin/api/v1/traces/") && method == "GET" {
         let cmd_id = path.strip_prefix("/admin/api/v1/traces/").unwrap_or("").trim_matches('/');
-        if let Some(ts) = &trace_storage {
-            match ts.get_trace(cmd_id).await {
-                Ok(Some(trace)) => {
-                    let body = serde_json::to_string(&trace).unwrap_or_default();
-                    return Ok(Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Content-Type", "application/json")
-                        .body(Full::new(bytes::Bytes::from(body)))
-                        .unwrap());
-                }
-                Ok(None) => {
-                    return Ok(Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .header("Content-Type", "application/json")
-                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
-                            "error": "TRACE_NOT_FOUND",
-                            "commandId": cmd_id
-                        }).to_string())))
-                        .unwrap());
-                }
-                Err(e) => {
-                    return Ok(Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .header("Content-Type", "application/json")
-                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
-                            "error": "STORAGE_ERROR",
-                            "message": e.to_string()
-                        }).to_string())))
-                        .unwrap());
-                }
-            }
-        } else {
-            return Ok(Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from("{\"error\":\"TRACE_STORAGE_NOT_ENABLED\"}")))
-                .unwrap());
-        }
+        return Ok(handlers::admin::handle_trace_by_id(trace_storage.as_ref(), cmd_id).await);
     }
-
-    // Checkpoints inspection endpoint
     if path.starts_with("/admin/api/v1/checkpoints") {
         let cmd_id = path.strip_prefix("/admin/api/v1/checkpoints/").unwrap_or("");
-        let body = serde_json::json!({
-            "commandId": cmd_id,
-            "status": "active",
-            "memoized": true
-        });
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "application/json")
-            .body(Full::new(bytes::Bytes::from(body.to_string())))
-            .unwrap());
+        return Ok(handlers::admin::handle_checkpoints(cmd_id));
     }
-
-    // 2. Deployment Governance & Admin Lockdown Controls
     if path == "/admin/api/v1/security/lockdown" && method == "POST" {
-        if let Some(dep) = &deployer {
-            dep.guard().emergency_lockdown();
-            let body = serde_json::json!({
-                "status": "locked_down",
-                "external_deploy_enabled": dep.guard().is_external_deploy_allowed(),
-                "dev_upload_enabled": dep.guard().is_dev_upload_allowed(),
-                "message": "Emergency lockdown activated. All deployments frozen."
-            });
-            return Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from(body.to_string())))
-                .unwrap());
-        } else {
-            return Ok(Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
-                .unwrap());
-        }
+        return Ok(handlers::admin::handle_lockdown(deployer.as_ref()));
     }
 
+    // 3. Deployer Subsystem
     if path == "/_flux/deployer/status" && method == "GET" {
-        if let Some(dep) = &deployer {
-            let records = dep.registry().list_records();
-            let body = serde_json::json!({
-                "external_deploy_enabled": dep.guard().is_external_deploy_allowed(),
-                "dev_upload_enabled": dep.guard().is_dev_upload_allowed(),
-                "auto_activate": dep.config().auto_activate,
-                "fluxcells": records,
-            });
-            return Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from(body.to_string())))
-                .unwrap());
-        } else {
-            return Ok(Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
-                .unwrap());
-        }
+        return Ok(handlers::deployer::handle_status(deployer.as_ref()));
     }
-
     if path == "/_flux/deployer/history" && method == "GET" {
-        if let Some(dep) = &deployer {
-            let events = dep.registry().list_audit_events();
-            let body = serde_json::json!({ "events": events });
-            return Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from(body.to_string())))
-                .unwrap());
-        } else {
-            return Ok(Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
-                .unwrap());
-        }
+        return Ok(handlers::deployer::handle_history(deployer.as_ref()));
     }
-
     if path == "/_flux/deployer/upload" && method == "POST" {
-        if let Some(dep) = &deployer {
-            let mut name = req.headers().get("X-Fluxcell-Name").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
-            let mut mount = req.headers().get("X-Fluxcell-Mount").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
-            let mut auto_activate = req.headers().get("X-Fluxcell-Auto-Activate")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.eq_ignore_ascii_case("true") || s == "1")
-                .unwrap_or(false);
-
-            let mut timeout_ms = None;
-
-            if let Some(q) = &query_string {
-                for param in q.split('&') {
-                    let mut kv = param.split('=');
-                    if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
-                        if k == "name" && name.is_none() {
-                            name = Some(simple_url_decode(v));
-                        } else if (k == "mount" || k == "mount_path") && mount.is_none() {
-                            mount = Some(simple_url_decode(v));
-                        } else if k == "auto_activate" || k == "activate" {
-                            auto_activate = v.eq_ignore_ascii_case("true") || v == "1";
-                        } else if k == "timeout_ms" {
-                            timeout_ms = v.parse::<u64>().ok();
-                        }
-                    }
-                }
-            }
-
-            let cell_name = match name {
-                Some(n) if !n.trim().is_empty() => n.trim().to_string(),
-                _ => {
-                    return Ok(Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .header("Content-Type", "application/json")
-                        .body(Full::new(bytes::Bytes::from("{\"error\":\"Missing required 'name' parameter or 'X-Fluxcell-Name' header\"}")))
-                        .unwrap());
-                }
-            };
-
-            let mount_path = match mount {
-                Some(m) if !m.trim().is_empty() => m.trim().to_string(),
-                _ => format!("/api/{}", cell_name),
-            };
-
-            let body_bytes = match req.into_body().collect().await {
-                Ok(collected) => collected.to_bytes().to_vec(),
-                Err(e) => {
-                    return Ok(Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Full::new(bytes::Bytes::from(format!("Failed to read body: {}", e))))
-                        .unwrap());
-                }
-            };
-
-            let effective_timeout = timeout_ms.or(Some(10_000));
-            match dep.stage_uploaded_artifact(&cell_name, body_bytes, &mount_path, effective_timeout, None) {
-                Ok(mut record) => {
-                    if auto_activate {
-                        match dep.activate(&cell_name, &record.sha256) {
-                            Ok(active_rec) => {
-                                record = active_rec;
-                            }
-                            Err(e) => {
-                                log::warn!("Artifact staged but auto-activation failed for '{}': {}", cell_name, e);
-                            }
-                        }
-                    }
-                    let body = serde_json::to_string(&record).unwrap_or_default();
-                    return Ok(Response::builder()
-                        .status(StatusCode::CREATED)
-                        .header("Content-Type", "application/json")
-                        .body(Full::new(bytes::Bytes::from(body)))
-                        .unwrap());
-                }
-                Err(e) => {
-                    let status = if !dep.guard().is_dev_upload_allowed() {
-                        StatusCode::FORBIDDEN
-                    } else {
-                        StatusCode::BAD_REQUEST
-                    };
-                    return Ok(Response::builder()
-                        .status(status)
-                        .header("Content-Type", "application/json")
-                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
-                            "error": "DEPLOY_ERROR",
-                            "message": e.to_string()
-                        }).to_string())))
-                        .unwrap());
-                }
-            }
-        } else {
-            return Ok(Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
-                .unwrap());
-        }
+        return Ok(handlers::deployer::handle_upload(deployer.as_ref(), req, query_string.as_deref()).await);
     }
-
     if path == "/_flux/deployer/activate" && method == "POST" {
-        if let Some(dep) = &deployer {
-            let body_bytes = match req.into_body().collect().await {
-                Ok(collected) => collected.to_bytes().to_vec(),
-                Err(e) => {
-                    return Ok(Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Full::new(bytes::Bytes::from(format!("Failed to read body: {}", e))))
-                        .unwrap());
-                }
-            };
-
-            #[derive(serde::Deserialize)]
-            struct ActivateRequest {
-                name: String,
-                sha256: String,
-            }
-
-            let activate_req: ActivateRequest = match serde_json::from_slice(&body_bytes) {
-                Ok(r) => r,
-                Err(e) => {
-                    return Ok(Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .header("Content-Type", "application/json")
-                        .body(Full::new(bytes::Bytes::from(format!("{{\"error\":\"INVALID_PAYLOAD\",\"message\":\"{}\"}}", e))))
-                        .unwrap());
-                }
-            };
-
-            match dep.activate(&activate_req.name, &activate_req.sha256) {
-                Ok(record) => {
-                    let body = serde_json::to_string(&record).unwrap_or_default();
-                    return Ok(Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Content-Type", "application/json")
-                        .body(Full::new(bytes::Bytes::from(body)))
-                        .unwrap());
-                }
-                Err(e) => {
-                    return Ok(Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .header("Content-Type", "application/json")
-                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
-                            "error": "ACTIVATION_ERROR",
-                            "message": e.to_string()
-                        }).to_string())))
-                        .unwrap());
-                }
-            }
-        } else {
-            return Ok(Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
-                .unwrap());
-        }
+        return Ok(handlers::deployer::handle_activate(deployer.as_ref(), req).await);
     }
-
     if path.starts_with("/_flux/deployer/fluxcells") && method == "DELETE" {
-        if let Some(dep) = &deployer {
-            let cell_name = if path.len() > "/_flux/deployer/fluxcells/".len() {
-                path["/_flux/deployer/fluxcells/".len()..].trim_matches('/').to_string()
-            } else {
-                let mut q_name = None;
-                if let Some(q) = &query_string {
-                    for param in q.split('&') {
-                        let mut kv = param.split('=');
-                        if let (Some("name"), Some(v)) = (kv.next(), kv.next()) {
-                            q_name = Some(v.to_string());
-                        }
-                    }
-                }
-                q_name.unwrap_or_default()
-            };
-
-            if cell_name.is_empty() {
-                return Ok(Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .header("Content-Type", "application/json")
-                    .body(Full::new(bytes::Bytes::from("{\"error\":\"Fluxcell name required\"}")))
-                    .unwrap());
-            }
-
-            match dep.remove(&cell_name) {
-                Ok(record) => {
-                    return Ok(Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Content-Type", "application/json")
-                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
-                            "status": "removed",
-                            "fluxcell": record
-                        }).to_string())))
-                        .unwrap());
-                }
-                Err(e) => {
-                    return Ok(Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .header("Content-Type", "application/json")
-                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
-                            "error": "REMOVE_ERROR",
-                            "message": e.to_string()
-                        }).to_string())))
-                        .unwrap());
-                }
-            }
-        } else {
-            return Ok(Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
-                .unwrap());
-        }
+        return Ok(handlers::deployer::handle_remove(deployer.as_ref(), &path, query_string.as_deref()));
     }
 
-    // 3. Lookup route in FluxRouter
-    let (fluxcell_name, relative_path_matched) = {
-        let router_lock = router.read().unwrap();
-        match router_lock.lookup(&method, &path) {
-            Ok(m) => (m.fluxcell_name.to_string(), m.relative_path.to_string()),
-            Err(RouterError::NotFound { .. }) => {
-                return Ok(Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .header("Content-Type", "application/json")
-                    .body(Full::new(bytes::Bytes::from(
-                        "{\"error\":\"NOT_FOUND\",\"message\":\"No fluxcell route matches request\"}",
-                    )))
-                    .unwrap());
-            }
-            Err(RouterError::MethodNotAllowed { allowed, .. }) => {
-                let allow_header = allowed.join(", ");
-                return Ok(Response::builder()
-                    .status(StatusCode::METHOD_NOT_ALLOWED)
-                    .header("Content-Type", "application/json")
-                    .header("Allow", allow_header)
-                    .body(Full::new(bytes::Bytes::from(
-                        "{\"error\":\"METHOD_NOT_ALLOWED\"}",
-                    )))
-                    .unwrap());
-            }
-            Err(e) => {
-                return Ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .header("Content-Type", "application/json")
-                    .body(Full::new(bytes::Bytes::from(format!(
-                        "{{\"error\":\"ROUTER_ERROR\",\"message\":\"{}\"}}",
-                        e
-                    ))))
-                    .unwrap());
-            }
-        }
-    };
-
-    // 4. Collect headers & body
-    let headers: Vec<(String, String)> = req
-        .headers()
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.as_str().to_string(), val.to_string())))
-        .collect();
-
-    let body_bytes = match req.into_body().collect().await {
-        Ok(collected) => collected.to_bytes().to_vec(),
-        Err(e) => {
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Full::new(bytes::Bytes::from(format!("Failed to read body: {}", e))))
-                .unwrap());
-        }
-    };
-
-    // 5. Dispatch to Fluxcell
-    let relative_path = if let Some(q) = &query_string {
-        format!("{}?{}", relative_path_matched, q)
-    } else {
-        relative_path_matched
-    };
-
-    let start_instant = std::time::Instant::now();
-    let started_at = chrono::Utc::now().to_rfc3339();
-
-    let payload_val: serde_json::Value =
-        serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null);
-
-    // Extract or generate command metadata for trace observability
-    let command_id = headers
-        .iter()
-        .find(|(k, _)| {
-            k.eq_ignore_ascii_case("x-command-id")
-                || k.eq_ignore_ascii_case("x-spectra-request-id")
-                || k.eq_ignore_ascii_case("x-request-id")
-                || k.eq_ignore_ascii_case("idempotency-key")
-        })
-        .map(|(_, v)| v.clone())
-        .or_else(|| {
-            payload_val
-                .get("commandId")
-                .or_else(|| payload_val.get("command_id"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
-
-    let hlc = headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-spectra-hlc") || k.eq_ignore_ascii_case("x-hlc"))
-        .map(|(_, v)| v.clone())
-        .or_else(|| {
-            payload_val
-                .get("hlc")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| {
-            format!(
-                "{}.000001",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis()
-            )
-        });
-
-    let operation_name = payload_val
-        .get("operationName")
-        .or_else(|| payload_val.get("operation_name"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("{} {}", method, path));
-
-    match dispatcher
-        .dispatch_with_spans(&fluxcell_name, &relative_path, &method, headers, body_bytes)
-        .await
-    {
-        Ok((status_code, resp_headers, resp_body, host_calls)) => {
-            let duration_ms = start_instant.elapsed().as_secs_f64() * 1000.0;
-            let completed_at = chrono::Utc::now().to_rfc3339();
-            let is_ok = status_code < 400;
-
-            if is_ok {
-                telemetry.increment_processed(None);
-            } else {
-                telemetry.increment_error();
-            }
-
-            telemetry.record_log(
-                if is_ok { "INFO" } else { "ERROR" },
-                &format!("HTTP {} '{}' [{}] -> HTTP {} ({:.2}ms)", method, path, operation_name, status_code, duration_ms),
-                Some(hlc.clone()),
-            );
-
-            if let Some(store) = &trace_storage {
-                let resp_val: serde_json::Value = serde_json::from_slice(&resp_body).unwrap_or_else(|_| {
-                    if let Ok(s) = std::str::from_utf8(&resp_body) {
-                        serde_json::Value::String(s.to_string())
-                    } else {
-                        serde_json::Value::Null
-                    }
-                });
-
-                let step_status = if is_ok { "ok".to_string() } else { "error".to_string() };
-                let step = crate::telemetry::FluxcellStepSpan {
-                    fluxcell_name: fluxcell_name.clone(),
-                    topic: format!("http:{}", path),
-                    function_name: "handle_http".to_string(),
-                    start_time: started_at.clone(),
-                    duration_ms,
-                    status: step_status,
-                    input_preview: if payload_val.is_null() { None } else { Some(payload_val.clone()) },
-                    output_preview: Some(resp_val.clone()),
-                    error: if is_ok { None } else { Some(format!("HTTP {}", status_code)) },
-                    host_calls,
-                };
-
-                let trace = crate::telemetry::DomainOperationTrace {
-                    command_id,
-                    hlc,
-                    topic: format!("http:{}", path),
-                    operation_name,
-                    ingress: "HTTP".to_string(),
-                    worker_id: "chassis-http".to_string(),
-                    status: if is_ok { "completed".to_string() } else { "failed".to_string() },
-                    total_duration_ms: duration_ms,
-                    started_at,
-                    completed_at,
-                    initial_input: payload_val,
-                    steps: vec![step],
-                    terminal_output: Some(resp_val),
-                    error: if is_ok { None } else { Some(format!("HTTP {}", status_code)) },
-                };
-
-                let store_clone = store.clone();
-                tokio::spawn(async move {
-                    let _ = store_clone.record_trace(&trace).await;
-                });
-            }
-
-            let mut builder = Response::builder().status(status_code);
-            for (k, v) in resp_headers {
-                builder = builder.header(k, v);
-            }
-            Ok(builder.body(Full::new(bytes::Bytes::from(resp_body))).unwrap())
-        }
-        Err(e) => {
-            telemetry.increment_error();
-            let duration_ms = start_instant.elapsed().as_secs_f64() * 1000.0;
-            let completed_at = chrono::Utc::now().to_rfc3339();
-
-            telemetry.record_log(
-                "ERROR",
-                &format!("HTTP {} '{}' [{}] dispatch failed: {}", method, path, operation_name, e),
-                Some(hlc.clone()),
-            );
-
-            if let Some(store) = &trace_storage {
-                let step = crate::telemetry::FluxcellStepSpan {
-                    fluxcell_name: fluxcell_name.clone(),
-                    topic: format!("http:{}", path),
-                    function_name: "handle_http".to_string(),
-                    start_time: started_at.clone(),
-                    duration_ms,
-                    status: "error".to_string(),
-                    input_preview: if payload_val.is_null() { None } else { Some(payload_val.clone()) },
-                    output_preview: None,
-                    error: Some(e.to_string()),
-                    host_calls: Vec::new(),
-                };
-
-                let trace = crate::telemetry::DomainOperationTrace {
-                    command_id,
-                    hlc,
-                    topic: format!("http:{}", path),
-                    operation_name,
-                    ingress: "HTTP".to_string(),
-                    worker_id: "chassis-http".to_string(),
-                    status: "failed".to_string(),
-                    total_duration_ms: duration_ms,
-                    started_at,
-                    completed_at,
-                    initial_input: payload_val,
-                    steps: vec![step],
-                    terminal_output: None,
-                    error: Some(e.to_string()),
-                };
-
-                let store_clone = store.clone();
-                tokio::spawn(async move {
-                    let _ = store_clone.record_trace(&trace).await;
-                });
-            }
-
-            Ok(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from(format!(
-                    "{{\"error\":\"FLUXCELL_DISPATCH_ERROR\",\"message\":\"{}\"}}",
-                    e
-                ))))
-                .unwrap())
-        }
-    }
+    // 4. Fluxcell Route Dispatch
+    Ok(handlers::dispatch::handle_fluxcell_dispatch(
+        req,
+        &path,
+        query_string.as_deref(),
+        &method,
+        &router,
+        &telemetry,
+        dispatcher.as_ref(),
+        trace_storage.as_ref(),
+    ).await)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http_body_util::BodyExt;
+    use hyper::StatusCode;
 
     struct MockDispatcher {
         status: u16,

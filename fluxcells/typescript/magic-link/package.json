@@ -1,0 +1,17 @@
+{
+  "name": "fluxcell-magic-link-ts",
+  "version": "0.1.0",
+  "description": "TypeScript AssemblyScript Magic Link Fluxcell for SpectraFlux",
+  "type": "module",
+  "scripts": {
+    "build": "bun run ../../../sdks/typescript/bin/build.mjs",
+    "build:debug": "bun run ../../../sdks/typescript/bin/build.mjs --debug",
+    "test": "bun run ../../../sdks/typescript/bin/verify-abi.mjs"
+  },
+  "dependencies": {
+    "@spectraflux/sdk": "file:../../../sdks/typescript"
+  },
+  "devDependencies": {
+    "assemblyscript": "^0.27.34"
+  }
+}

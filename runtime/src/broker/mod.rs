@@ -6,6 +6,9 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+pub mod processor;
+pub use processor::EventProcessor;
+
 #[derive(Debug, Clone)]
 pub struct BrokerMessage {
     pub id: String,

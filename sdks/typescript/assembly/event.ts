@@ -1,5 +1,6 @@
 // AssemblyScript SDK: Event Domain Models
 import { getStep, saveStep, step } from "./checkpoint";
+import { unescapeJson } from "./http";
 
 export enum EventVerdict {
   Ack = 0,
@@ -57,11 +58,40 @@ export class EventContext {
       }
     }
 
-    // Extract payload / payload-json
+    // Extract payload / payload_json
     let payloadIdx = jsonStr.indexOf('"payload_json":');
-    if (payloadIdx == -1) payloadIdx = jsonStr.indexOf('"payload":');
+    let keyLen = 15;
+    if (payloadIdx == -1) {
+      payloadIdx = jsonStr.indexOf('"payload":');
+      keyLen = 10;
+    }
     if (payloadIdx != -1) {
-      payload = jsonStr.substring(payloadIdx + 10).trimStart();
+      const rest = jsonStr.substring(payloadIdx + keyLen).trimStart();
+      if (rest.startsWith('"')) {
+        let inEscape = false;
+        let end = -1;
+        for (let i = 1; i < rest.length; i++) {
+          const c = rest.charCodeAt(i);
+          if (inEscape) {
+            inEscape = false;
+          } else if (c == 92) {
+            inEscape = true;
+          } else if (c == 34) {
+            end = i;
+            break;
+          }
+        }
+        if (end != -1) {
+          payload = unescapeJson(rest.substring(1, end));
+        } else {
+          payload = rest;
+        }
+      } else {
+        payload = rest;
+        if (payload.endsWith('}')) {
+          payload = payload.substring(0, payload.length - 1).trim();
+        }
+      }
     } else {
       payload = jsonStr;
     }

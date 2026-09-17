@@ -1,0 +1,24 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "fluxcell-magic-link-ts",
+      "dependencies": {
+        "@spectraflux/sdk": "file:../../../sdks/typescript",
+      },
+      "devDependencies": {
+        "assemblyscript": "^0.27.34",
+      },
+    },
+  },
+  "packages": {
+    "@spectraflux/sdk": ["@spectraflux/sdk@file:../../../sdks/typescript", { "devDependencies": { "assemblyscript": "^0.27.34" }, "bin": { "fluxcell-bootstrap": "./bin/bootstrap.mjs", "fluxcell-build": "./bin/build.mjs", "fluxcell-deploy": "./bin/deploy.mjs", "fluxcell-verify": "./bin/verify-abi.mjs" } }],
+
+    "assemblyscript": ["assemblyscript@0.27.37", "", { "dependencies": { "binaryen": "116.0.0-nightly.20240114", "long": "^5.2.4" }, "bin": { "asc": "bin/asc.js", "asinit": "bin/asinit.js" } }, "sha512-YtY5k3PiV3SyUQ6gRlR2OCn8dcVRwkpiG/k2T5buoL2ymH/Z/YbaYWbk/f9mO2HTgEtGWjPiAQrIuvA7G/63Gg=="],
+
+    "binaryen": ["binaryen@116.0.0-nightly.20240114", "", { "bin": { "wasm2js": "bin/wasm2js", "wasm-opt": "bin/wasm-opt" } }, "sha512-0GZrojJnuhoe+hiwji7QFaL3tBlJoA+KFUN7ouYSDGZLSo9CKM8swQX8n/UcbR0d1VuZKU+nhogNzv423JEu5A=="],
+
+    "long": ["long@5.3.2", "", {}, "sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA=="],
+  }
+}

@@ -15,11 +15,23 @@ async function main() {
   const buildDir = path.resolve(process.cwd(), "build");
   fs.mkdirSync(buildDir, { recursive: true });
 
-  // Resolve asc binary: check local node_modules, SDK node_modules, or global
+  // Resolve asc binary: check local node_modules, SDK node_modules, or search upwards
   let ascBin = path.resolve(process.cwd(), "node_modules/.bin/asc");
   if (!fs.existsSync(ascBin)) {
-    // Check if running from SDK or parent workspace
-    ascBin = path.resolve(process.cwd(), "../../sdks/typescript/node_modules/.bin/asc");
+    let dir = process.cwd();
+    while (dir && dir !== path.dirname(dir)) {
+      const candidate1 = path.join(dir, "node_modules/.bin/asc");
+      const candidate2 = path.join(dir, "sdks/typescript/node_modules/.bin/asc");
+      if (fs.existsSync(candidate1)) {
+        ascBin = candidate1;
+        break;
+      }
+      if (fs.existsSync(candidate2)) {
+        ascBin = candidate2;
+        break;
+      }
+      dir = path.dirname(dir);
+    }
   }
 
   const ascArgs = [

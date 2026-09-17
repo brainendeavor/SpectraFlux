@@ -45,8 +45,19 @@ async function main() {
     return (1000n << 32n) | (len & 0xffffffffn);
   }
 
+  const mockCheckpoint = {
+    get: () => 0n,
+    save: () => 1,
+  };
+
+  const mockBroker = {
+    publish: () => 1,
+  };
+
   const importObject = {
     host_db: mockDb,
+    checkpoint: mockCheckpoint,
+    host_broker: mockBroker,
     env: {
       abort: (msg, file, line, col) => {
         console.error(`Guest aborted at ${file}:${line}:${col}`);

@@ -47,9 +47,23 @@ test("SpectraFlux TypeScript SDK ABI & Runtime Verification", async () => {
     },
   };
 
+  const publishedEvents: Array<{ topic: string; payload: string }> = [];
+  const mockBroker = {
+    publish: (tPtr: number, tLen: number, pPtr: number, pLen: number): number => {
+      if (!exportsRef) return 0;
+      const tView = new Uint8Array(exportsRef.memory.buffer, tPtr, tLen);
+      const topic = Buffer.from(tView).toString("utf8");
+      const pView = new Uint8Array(exportsRef.memory.buffer, pPtr, pLen);
+      const payload = Buffer.from(pView).toString("utf8");
+      publishedEvents.push({ topic, payload });
+      return 1;
+    },
+  };
+
   const importObject = {
     host_db: mockDb,
     checkpoint: mockCheckpoint,
+    host_broker: mockBroker,
     env: {
       abort: (msg: any, file: any, line: any, col: any) => {
         console.error(`Abort called: ${file}:${line}:${col}`);
@@ -110,25 +124,32 @@ test("SpectraFlux TypeScript SDK ABI & Runtime Verification", async () => {
 
   // Verify handle_http default response
   const req = writeGuestString(
-    JSON.stringify({ path: "/unknown", method: "GET", headers: [], body: "" })
+    JSON.stringify({
+      path: "/unknown",
+      method: "GET",
+      headers: [["Authorization", "Bearer tok-123"], ["Content-Type", "application/json"]],
+      body: '{"foo":"bar \\"quoted\\" inside"}'
+    })
   );
   const respPacked = exports.handle_http(req.ptr, req.len);
   exports.deallocate(req.ptr, req.len);
   const resp = JSON.parse(readGuestString(respPacked));
+  exports.deallocate(Number(BigInt(respPacked) >> 32n), Number(BigInt(respPacked) & 0xffffffffn));
   expect(resp.status).toBe(404);
 
-  // Verify handle_event default response
+  // Verify handle_event with payload_json
   const ev = writeGuestString(
     JSON.stringify({
       event_id: "evt-01",
       hlc: "100-1",
       topic: "mutation.test",
-      payload: "{}",
+      payload_json: '{"order_id":"ord-999","status":"approved"}',
     })
   );
   const evRespPacked = exports.handle_event(ev.ptr, ev.len);
   exports.deallocate(ev.ptr, ev.len);
   const evResp = JSON.parse(readGuestString(evRespPacked));
+  exports.deallocate(Number(BigInt(evRespPacked) >> 32n), Number(BigInt(evRespPacked) & 0xffffffffn));
   expect(evResp.status).toBe("ok");
 
   // 4. Verify Checkpoint Step Memoization & Deduplication
@@ -141,6 +162,7 @@ test("SpectraFlux TypeScript SDK ABI & Runtime Verification", async () => {
   exports.deallocate(chkVal.ptr, chkVal.len);
 
   const chkResult = JSON.parse(readGuestString(chkResultPacked));
+  exports.deallocate(Number(BigInt(chkResultPacked) >> 32n), Number(BigInt(chkResultPacked) & 0xffffffffn));
   expect(chkResult.result).toEqual({ reserved: true, sku: "item-999" });
   expect(chkResult.cached).toEqual({ reserved: true, sku: "item-999" });
   expect(chkResult.invocations).toBe(1); // Action closure only invoked ONCE!

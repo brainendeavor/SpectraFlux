@@ -4,22 +4,22 @@
 //! out-of-order events before dispatching expensive database transactions.
 
 use crate::hlc::is_stale;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::sync::Mutex;
 
 /// Bounded deduplication buffer mapping keys to their latest seen HLC timestamp and optional value.
 pub struct DeduplicationBuffer<K, V = ()> {
     capacity: usize,
-    entries: Mutex<HashMap<K, (String, V)>>,
+    entries: Mutex<(HashMap<K, (String, V)>, VecDeque<K>)>,
 }
 
 impl<K: Hash + Eq + Clone, V: Clone> DeduplicationBuffer<K, V> {
     /// Creates a new deduplication buffer with the given capacity.
     pub fn new(capacity: usize) -> Self {
         Self {
-            capacity,
-            entries: Mutex::new(HashMap::new()),
+            capacity: capacity.max(1),
+            entries: Mutex::new((HashMap::new(), VecDeque::new())),
         }
     }
 
@@ -28,15 +28,19 @@ impl<K: Hash + Eq + Clone, V: Clone> DeduplicationBuffer<K, V> {
     /// If fresh: updates the cache with `(hlc, val)` and returns `true`.
     /// If stale or duplicate: leaves the cache untouched and returns `false`.
     pub fn check_and_update(&self, key: &K, hlc: &str, val: V) -> bool {
-        let mut map = self.entries.lock().unwrap();
+        let mut guard = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let (ref mut map, ref mut queue) = *guard;
         if let Some((existing_hlc, _)) = map.get(key) {
             if is_stale(hlc, existing_hlc) {
                 return false;
             }
-        }
-
-        if map.len() >= self.capacity {
-            map.clear();
+        } else {
+            if map.len() >= self.capacity {
+                if let Some(oldest) = queue.pop_front() {
+                    map.remove(&oldest);
+                }
+            }
+            queue.push_back(key.clone());
         }
 
         map.insert(key.clone(), (hlc.to_string(), val));
@@ -45,7 +49,8 @@ impl<K: Hash + Eq + Clone, V: Clone> DeduplicationBuffer<K, V> {
 
     /// Returns the cached value for `key` if present.
     pub fn get(&self, key: &K) -> Option<(String, V)> {
-        self.entries.lock().unwrap().get(key).cloned()
+        let guard = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        guard.0.get(key).cloned()
     }
 }
 

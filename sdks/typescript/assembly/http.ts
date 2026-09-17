@@ -60,6 +60,7 @@ export class HttpRequest {
     let path = "/";
     let method = "GET";
     let body = "";
+    const headers = new Array<string[]>();
 
     // Extract path
     const pathIdx = jsonStr.indexOf('"path":');
@@ -85,21 +86,89 @@ export class HttpRequest {
       }
     }
 
+    // Extract headers: [["name", "val"], ...]
+    const headersIdx = jsonStr.indexOf('"headers":');
+    if (headersIdx != -1) {
+      const startArr = jsonStr.indexOf('[', headersIdx + 10);
+      if (startArr != -1) {
+        let depth = 0;
+        let inStr = false;
+        let inEsc = false;
+        let endArr = -1;
+        for (let i = startArr; i < jsonStr.length; i++) {
+          const c = jsonStr.charCodeAt(i);
+          if (inEsc) {
+            inEsc = false;
+            continue;
+          }
+          if (c == 92) { // \
+            inEsc = true;
+            continue;
+          }
+          if (c == 34) { // "
+            inStr = !inStr;
+            continue;
+          }
+          if (!inStr) {
+            if (c == 91) { // [
+              depth++;
+            } else if (c == 93) { // ]
+              depth--;
+              if (depth == 0) {
+                endArr = i;
+                break;
+              }
+            }
+          }
+        }
+        if (endArr != -1) {
+          const headersJson = jsonStr.substring(startArr + 1, endArr).trim();
+          let curr = headersJson;
+          while (curr.length > 0) {
+            const openIdx = curr.indexOf('[');
+            if (openIdx == -1) break;
+            const closeIdx = curr.indexOf(']', openIdx);
+            if (closeIdx == -1) break;
+            const pairStr = curr.substring(openIdx + 1, closeIdx);
+            const parts = parseStringArray(pairStr);
+            if (parts.length >= 2) {
+              headers.push([parts[0], parts[1]]);
+            }
+            curr = curr.substring(closeIdx + 1);
+          }
+        }
+      }
+    }
+
     // Extract body
     const bodyIdx = jsonStr.indexOf('"body":');
     if (bodyIdx != -1) {
       const rest = jsonStr.substring(bodyIdx + 7).trimStart();
       if (rest.startsWith('"')) {
-        const end = rest.indexOf('"', 1);
+        let inEscape = false;
+        let end = -1;
+        for (let i = 1; i < rest.length; i++) {
+          const c = rest.charCodeAt(i);
+          if (inEscape) {
+            inEscape = false;
+          } else if (c == 92) { // \
+            inEscape = true;
+          } else if (c == 34) { // "
+            end = i;
+            break;
+          }
+        }
         if (end != -1) {
-          body = rest.substring(1, end);
+          body = unescapeJson(rest.substring(1, end));
+        } else {
+          body = rest;
         }
       } else {
         body = rest;
       }
     }
 
-    return new HttpRequest(path, method, body);
+    return new HttpRequest(path, method, body, headers);
   }
 }
 
@@ -167,4 +236,64 @@ function escapeJson(s: string): string {
     }
   }
   return out;
+}
+
+export function unescapeJson(s: string): string {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charAt(i);
+    if (c == "\\" && i + 1 < s.length) {
+      const next = s.charAt(i + 1);
+      if (next == '"') {
+        out += '"';
+        i++;
+      } else if (next == '\\') {
+        out += '\\';
+        i++;
+      } else if (next == 'n') {
+        out += '\n';
+        i++;
+      } else if (next == 'r') {
+        out += '\r';
+        i++;
+      } else if (next == 't') {
+        out += '\t';
+        i++;
+      } else {
+        out += next;
+        i++;
+      }
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+function parseStringArray(s: string): string[] {
+  const res = new Array<string>();
+  let inStr = false;
+  let inEsc = false;
+  let start = -1;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (inEsc) {
+      inEsc = false;
+      continue;
+    }
+    if (c == 92) {
+      inEsc = true;
+      continue;
+    }
+    if (c == 34) { // "
+      if (inStr) {
+        res.push(unescapeJson(s.substring(start, i)));
+        inStr = false;
+      } else {
+        inStr = true;
+        start = i + 1;
+      }
+    }
+  }
+  return res;
 }

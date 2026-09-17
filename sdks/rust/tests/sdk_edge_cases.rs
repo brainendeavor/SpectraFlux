@@ -154,3 +154,29 @@ fn test_deduplication_buffer_monotonic_filtering() {
     // Fresh message accepted
     assert!(dedup.check_and_update(&key, "100.2", ()));
 }
+
+#[test]
+fn test_fifo_bounded_eviction_retains_recent_entries() {
+    // 1. DeduplicationBuffer FIFO eviction
+    let dedup: DeduplicationBuffer<String, i32> = DeduplicationBuffer::new(2);
+    assert!(dedup.check_and_update(&"k1".to_string(), "100.1", 1));
+    assert!(dedup.check_and_update(&"k2".to_string(), "100.1", 2));
+    // Exceed capacity: k1 should be evicted, k2 retained
+    assert!(dedup.check_and_update(&"k3".to_string(), "100.1", 3));
+
+    assert_eq!(dedup.get(&"k1".to_string()), None);
+    assert_eq!(dedup.get(&"k2".to_string()), Some(("100.1".to_string(), 2)));
+    assert_eq!(dedup.get(&"k3".to_string()), Some(("100.1".to_string(), 3)));
+
+    // 2. CausalGuard FIFO eviction
+    let guard: CausalGuard<String> = CausalGuard::new(2);
+    assert_eq!(guard.evaluate_and_advance(&"e1".to_string(), "100.1"), CausalVerdict::Fresh);
+    assert_eq!(guard.evaluate_and_advance(&"e2".to_string(), "100.1"), CausalVerdict::Fresh);
+    // Exceed capacity: e1 should be evicted, e2 retained
+    assert_eq!(guard.evaluate_and_advance(&"e3".to_string(), "100.1"), CausalVerdict::Fresh);
+
+    assert_eq!(guard.get_watermark(&"e1".to_string()), None);
+    assert_eq!(guard.get_watermark(&"e2".to_string()), Some("100.1".to_string()));
+    assert_eq!(guard.get_watermark(&"e3".to_string()), Some("100.1".to_string()));
+}
+

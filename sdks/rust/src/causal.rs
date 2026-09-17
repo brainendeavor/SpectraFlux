@@ -7,7 +7,7 @@
 use crate::db::Transaction;
 use crate::hlc::parse_hlc;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::sync::Mutex;
 
@@ -73,15 +73,15 @@ pub fn evaluate_causality(incoming: &str, existing: &str) -> CausalVerdict {
 /// expensive database transactions.
 pub struct CausalGuard<K> {
     capacity: usize,
-    watermarks: Mutex<HashMap<K, String>>,
+    watermarks: Mutex<(HashMap<K, String>, VecDeque<K>)>,
 }
 
 impl<K: Hash + Eq + Clone> CausalGuard<K> {
     /// Creates a new causal guard with the given capacity.
     pub fn new(capacity: usize) -> Self {
         Self {
-            capacity,
-            watermarks: Mutex::new(HashMap::new()),
+            capacity: capacity.max(1),
+            watermarks: Mutex::new((HashMap::new(), VecDeque::new())),
         }
     }
 
@@ -90,16 +90,20 @@ impl<K: Hash + Eq + Clone> CausalGuard<K> {
     /// If `Fresh`, automatically advances the watermark to `incoming_hlc`.
     /// If `Stale` or `Duplicate`, leaves the watermark untouched.
     pub fn evaluate_and_advance(&self, key: &K, incoming_hlc: &str) -> CausalVerdict {
-        let mut map = self.watermarks.lock().unwrap();
+        let mut guard = self.watermarks.lock().unwrap_or_else(|e| e.into_inner());
+        let (ref mut map, ref mut queue) = *guard;
         if let Some(existing) = map.get(key) {
             let verdict = evaluate_causality(incoming_hlc, existing);
             if !verdict.is_fresh() {
                 return verdict;
             }
-        }
-
-        if map.len() >= self.capacity {
-            map.clear();
+        } else {
+            if map.len() >= self.capacity {
+                if let Some(oldest) = queue.pop_front() {
+                    map.remove(&oldest);
+                }
+            }
+            queue.push_back(key.clone());
         }
 
         map.insert(key.clone(), incoming_hlc.to_string());
@@ -108,7 +112,8 @@ impl<K: Hash + Eq + Clone> CausalGuard<K> {
 
     /// Returns the current high-water mark for `key` if tracked.
     pub fn get_watermark(&self, key: &K) -> Option<String> {
-        self.watermarks.lock().unwrap().get(key).cloned()
+        let guard = self.watermarks.lock().unwrap_or_else(|e| e.into_inner());
+        guard.0.get(key).cloned()
     }
 }
 
@@ -151,7 +156,11 @@ pub fn advance_db_watermark(
     VALUES ($1, $2, $3, NOW()) \
     ON CONFLICT (namespace, entity_id) DO UPDATE \
     SET hlc = EXCLUDED.hlc, updated_at = NOW() \
-    WHERE _flux_causal_watermarks.hlc < EXCLUDED.hlc";
+    WHERE CASE WHEN _flux_causal_watermarks.hlc LIKE '%.%' AND EXCLUDED.hlc LIKE '%.%' THEN \
+        (split_part(_flux_causal_watermarks.hlc, '.', 1)::bigint < split_part(EXCLUDED.hlc, '.', 1)::bigint OR \
+        (split_part(_flux_causal_watermarks.hlc, '.', 1)::bigint = split_part(EXCLUDED.hlc, '.', 1)::bigint AND \
+        split_part(_flux_causal_watermarks.hlc, '.', 2)::bigint < split_part(EXCLUDED.hlc, '.', 2)::bigint)) \
+        ELSE _flux_causal_watermarks.hlc < EXCLUDED.hlc END";
 
     tx.execute(upsert_sql, &serde_json::json!([namespace, entity_id, incoming_hlc]))?;
     Ok(CausalVerdict::Fresh)

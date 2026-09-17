@@ -6,6 +6,7 @@
 //! use fluxcell_sdk::prelude::*;
 //! ```
 
+pub use crate::broker::publish_event;
 pub use crate::causal::{advance_db_watermark, CausalGuard, CausalVerdict};
 pub use crate::db::{Database, Transaction};
 pub use crate::dedup::DeduplicationBuffer;
