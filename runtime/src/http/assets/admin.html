@@ -49,7 +49,7 @@
       font-size: 0.75rem;
       font-weight: 600;
       padding: 0.2rem 0.6rem;
-      border-radius: 9999px;
+      border-radius: 4px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       display: inline-flex;
@@ -93,6 +93,10 @@
       cursor: pointer;
       border-bottom: 2px solid transparent;
       transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      position: relative;
     }
     .tab-btn:hover { color: var(--text); }
     .tab-btn.active {
@@ -190,6 +194,118 @@
     }
     .clickable {
       cursor: pointer;
+    }
+    .table tbody tr.trace-row {
+      cursor: pointer;
+      transition: background-color 0.15s ease;
+    }
+    .table tbody tr.trace-row:hover {
+      background: rgba(56, 189, 248, 0.07);
+    }
+    .table tbody tr.trace-row.selected-row {
+      background: rgba(56, 189, 248, 0.12) !important;
+      outline: 1px solid var(--accent);
+      outline-offset: -1px;
+    }
+    .tab-info-container {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      cursor: pointer;
+      font-weight: normal;
+      text-transform: none;
+      vertical-align: middle;
+    }
+    .info-circle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-family: serif;
+      font-style: italic;
+      font-weight: bold;
+      transition: all 0.2s;
+      user-select: none;
+      line-height: 1;
+    }
+    .tab-btn.active .info-circle {
+      border-color: rgba(56, 189, 248, 0.4);
+      color: var(--accent);
+    }
+    .info-circle:hover, .tab-info-container:hover .info-circle, .tab-info-container:focus-within .info-circle {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: var(--accent-glow);
+    }
+    .info-tooltip-popover {
+      visibility: hidden;
+      opacity: 0;
+      position: absolute;
+      top: calc(100% + 10px);
+      left: 0;
+      background: #111827;
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.75rem 1rem;
+      font-size: 0.8rem;
+      line-height: 1.4;
+      color: var(--text-muted);
+      width: 320px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+      z-index: 1000;
+      transition: opacity 0.2s ease, visibility 0.2s ease;
+      pointer-events: none;
+      white-space: normal;
+      text-transform: none;
+      letter-spacing: normal;
+      text-align: left;
+    }
+    .tab-info-container:hover .info-tooltip-popover, .tab-info-container:focus-within .info-tooltip-popover {
+      visibility: visible;
+      opacity: 1;
+    }
+
+    .kbd-hint {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.15rem 0.4rem;
+      font-size: 0.725rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: var(--text);
+      line-height: 1;
+    }
+
+    /* Shortcuts Modal */
+    #shortcutsModalBackdrop {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(2px);
+      z-index: 1099;
+      display: none;
+    }
+    #shortcutsModal {
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 440px;
+      max-width: 90vw;
+      background: #111827;
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8);
+      z-index: 1100;
+      display: none;
+      padding: 1.5rem;
     }
 
     /* Inspection Slide-out Drawer */
@@ -415,10 +531,11 @@
   <header>
     <div class="logo-area">
       <div class="logo">SpectraFlux</div>
-      <span class="badge badge-running">Mini-Datadog Active</span>
+      <span class="badge badge-running">Live Logs Active</span>
       <span class="badge badge-info" id="workerIdBadge">worker: ...</span>
     </div>
     <div style="display: flex; gap: 0.75rem; align-items: center;">
+      <button class="btn btn-secondary btn-sm" onclick="toggleShortcutsModal(true)" title="Keyboard Shortcuts (?)">⌨️ Shortcuts</button>
       <label style="font-size: 0.8125rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.35rem; cursor: pointer;">
         <input type="checkbox" id="autoRefresh" checked> Auto-refresh (2s)
       </label>
@@ -450,23 +567,25 @@
   </div>
 
   <div class="nav-tabs">
-    <button class="tab-btn active" onclick="switchTab('traces')">Domain Operations (Traces)</button>
-    <button class="tab-btn" onclick="switchTab('logs')">Live Logs (Mini-Datadog)</button>
-    <button class="tab-btn" onclick="switchTab('fluxcells')">Fluxcells &amp; Routes</button>
-    <button class="tab-btn" onclick="switchTab('checkpoints')">Step Checkpoints</button>
+    <button class="tab-btn active" id="tabBtn-traces" onclick="switchTab('traces')">
+      <span>Domain Operations (Traces)</span>
+      <span class="tab-info-container" onclick="event.stopPropagation()">
+        <span class="info-circle" aria-label="Domain Operations Info">ⓘ</span>
+        <span class="info-tooltip-popover">
+          <strong style="color: var(--accent);">Domain Operations Observability</strong><br>
+          Every mutation accepted by SpectraGQL is captured end-to-end: input payload, sequential fluxcell execution DAG, host capabilities (database SQL queries, durable step checkpoints, and KV operations), and output payload, scoped by monotonic UUIDv7 command ID and HLC.
+        </span>
+      </span>
+    </button>
+    <button class="tab-btn" id="tabBtn-logs" onclick="switchTab('logs')">Live Logs</button>
+    <button class="tab-btn" id="tabBtn-fluxcells" onclick="switchTab('fluxcells')">Fluxcells &amp; Routes</button>
+    <button class="tab-btn" id="tabBtn-checkpoints" onclick="switchTab('checkpoints')">Step Checkpoints</button>
   </div>
 
   <!-- 1. Domain Operations (Traces) Tab -->
   <div id="tab-traces">
-    <div class="stat-card" style="margin-bottom: 1rem;">
-      <h3 style="margin-bottom: 0.35rem; font-size: 1rem; color: var(--accent);">Domain Operation Observability (Full Mutation DAG)</h3>
-      <p style="color: var(--text-muted); font-size: 0.85rem;">
-        Every mutation accepted by SpectraGQL is captured end-to-end: input payload, sequential fluxcell execution DAG,
-        host capabilities (database SQL queries, durable step checkpoints, and KV operations), and domain output, scoped by monotonic UUIDv7 command ID and HLC.
-      </p>
-    </div>
     <div class="controls-row">
-      <input type="text" id="traceSearchInput" class="search-box" placeholder="Filter by Command ID, Operation, Target/Topic..." oninput="renderTraces()">
+      <input type="text" id="traceSearchInput" class="search-box" placeholder="Filter by Command ID, Operation, Target/Topic... (Press '/' to search)" oninput="renderTraces()" style="flex: 1; min-width: 260px;">
       <div style="display: flex; gap: 0.35rem; align-items: center;">
         <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">Ingress:</span>
         <button class="btn btn-secondary btn-sm" id="btnIngress-ALL" onclick="setIngressFilter('ALL')">ALL</button>
@@ -493,11 +612,10 @@
             <th>Duration</th>
             <th>Steps / Host Calls</th>
             <th>Started At</th>
-            <th>Action</th>
           </tr>
         </thead>
         <tbody id="traceTableBody">
-          <tr><td colspan="9" style="color: var(--text-muted); padding: 1.5rem; text-align: center;">Loading domain traces...</td></tr>
+          <tr><td colspan="8" style="color: var(--text-muted); padding: 1.5rem; text-align: center;">Loading domain traces...</td></tr>
         </tbody>
       </table>
     </div>
@@ -568,12 +686,60 @@
     </div>
   </div>
 
+  <!-- Keyboard Shortcuts Cheatsheet Modal -->
+  <div id="shortcutsModalBackdrop" onclick="toggleShortcutsModal(false)"></div>
+  <div id="shortcutsModal">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
+      <div style="font-weight: 700; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem;">
+        <span>⌨️ Keyboard Shortcuts</span>
+      </div>
+      <button class="drawer-close" onclick="toggleShortcutsModal(false)">&times;</button>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 0.75rem; font-size: 0.875rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: var(--text-muted);">Switch Tabs</span>
+        <div style="display: flex; gap: 0.25rem;">
+          <kbd class="kbd-hint">1</kbd>
+          <kbd class="kbd-hint">2</kbd>
+          <kbd class="kbd-hint">3</kbd>
+          <kbd class="kbd-hint">4</kbd>
+        </div>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: var(--text-muted);">Navigate Traces Table</span>
+        <div style="display: flex; gap: 0.25rem;">
+          <kbd class="kbd-hint">j</kbd> / <kbd class="kbd-hint">k</kbd> or <kbd class="kbd-hint">↓</kbd> / <kbd class="kbd-hint">↑</kbd>
+        </div>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: var(--text-muted);">Inspect Selected Trace</span>
+        <kbd class="kbd-hint">Enter</kbd>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: var(--text-muted);">Focus Search Filter</span>
+        <kbd class="kbd-hint">/</kbd>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: var(--text-muted);">Close Drawer / Dismiss</span>
+        <kbd class="kbd-hint">Esc</kbd>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: var(--text-muted);">Manual Refresh</span>
+        <kbd class="kbd-hint">r</kbd>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: var(--text-muted);">Toggle Shortcuts Help</span>
+        <kbd class="kbd-hint">?</kbd>
+      </div>
+    </div>
+  </div>
+
   <!-- Slide-out Drawer for Domain Operation Trace Inspection -->
   <div id="traceDrawerBackdrop" onclick="closeTraceDrawer()"></div>
   <div id="traceDrawer">
     <div class="drawer-header">
       <div class="drawer-title">
-        <span>⚡ Domain Operation Trace</span>
+        <span>🔬 Domain Operation Trace</span>
         <span id="drawerStatusBadge" class="badge badge-completed">COMPLETED</span>
       </div>
       <button class="drawer-close" onclick="closeTraceDrawer()">&times;</button>
@@ -586,6 +752,9 @@
   <script>
     let allLogs = [];
     let allTraces = [];
+    let currentFilteredTraces = [];
+    let selectedTraceIndex = -1;
+    let currentTab = 'traces';
     let currentLevel = 'ALL';
     let currentTraceStatus = 'ALL';
     let currentIngressFilter = 'ALL';
@@ -594,13 +763,114 @@
     let activePayloadTab = 'input';
 
     function switchTab(tab) {
+      currentTab = tab;
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      event.target.classList.add('active');
+      const activeBtn = document.getElementById('tabBtn-' + tab);
+      if (activeBtn) activeBtn.classList.add('active');
       document.getElementById('tab-traces').style.display = tab === 'traces' ? 'block' : 'none';
       document.getElementById('tab-logs').style.display = tab === 'logs' ? 'block' : 'none';
       document.getElementById('tab-fluxcells').style.display = tab === 'fluxcells' ? 'block' : 'none';
       document.getElementById('tab-checkpoints').style.display = tab === 'checkpoints' ? 'block' : 'none';
     }
+
+    function toggleShortcutsModal(show) {
+      const modal = document.getElementById('shortcutsModal');
+      const backdrop = document.getElementById('shortcutsModalBackdrop');
+      if (!modal || !backdrop) return;
+      const shouldShow = (show !== undefined) ? show : (modal.style.display !== 'block');
+      modal.style.display = shouldShow ? 'block' : 'none';
+      backdrop.style.display = shouldShow ? 'block' : 'none';
+    }
+
+    function selectTraceRow(index) {
+      if (!currentFilteredTraces || currentFilteredTraces.length === 0) {
+        selectedTraceIndex = -1;
+        return;
+      }
+      if (index < 0) index = 0;
+      if (index >= currentFilteredTraces.length) index = currentFilteredTraces.length - 1;
+      selectedTraceIndex = index;
+
+      const rows = document.querySelectorAll('#traceTableBody tr.trace-row');
+      rows.forEach((r, idx) => {
+        if (idx === selectedTraceIndex) {
+          r.classList.add('selected-row');
+          r.scrollIntoView({ block: 'nearest' });
+        } else {
+          r.classList.remove('selected-row');
+        }
+      });
+    }
+
+    window.addEventListener('keydown', (e) => {
+      const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
+
+      if (e.key === 'Escape') {
+        const modal = document.getElementById('shortcutsModal');
+        if (modal && modal.style.display === 'block') {
+          toggleShortcutsModal(false);
+          return;
+        }
+        const drawer = document.getElementById('traceDrawer');
+        if (drawer && drawer.classList.contains('open')) {
+          closeTraceDrawer();
+          return;
+        }
+        if (isInput) {
+          e.target.blur();
+          return;
+        }
+      }
+
+      if (isInput) return;
+
+      if (e.key === '/') {
+        e.preventDefault();
+        if (currentTab === 'traces') {
+          const inp = document.getElementById('traceSearchInput');
+          if (inp) { inp.focus(); inp.select(); }
+        } else if (currentTab === 'logs') {
+          const inp = document.getElementById('logFilter');
+          if (inp) { inp.focus(); inp.select(); }
+        } else if (currentTab === 'checkpoints') {
+          const inp = document.getElementById('chkCommandId');
+          if (inp) { inp.focus(); inp.select(); }
+        }
+        return;
+      }
+
+      if (e.key === '?') {
+        e.preventDefault();
+        toggleShortcutsModal();
+        return;
+      }
+
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        fetchData();
+        return;
+      }
+
+      if (e.key === '1') { switchTab('traces'); return; }
+      if (e.key === '2') { switchTab('logs'); return; }
+      if (e.key === '3') { switchTab('fluxcells'); return; }
+      if (e.key === '4') { switchTab('checkpoints'); return; }
+
+      if (currentTab === 'traces' && currentFilteredTraces.length > 0) {
+        if (e.key === 'ArrowDown' || e.key === 'j') {
+          e.preventDefault();
+          selectTraceRow(selectedTraceIndex + 1);
+        } else if (e.key === 'ArrowUp' || e.key === 'k') {
+          e.preventDefault();
+          selectTraceRow(selectedTraceIndex - 1);
+        } else if (e.key === 'Enter') {
+          if (selectedTraceIndex >= 0 && selectedTraceIndex < currentFilteredTraces.length) {
+            e.preventDefault();
+            inspectTrace(currentFilteredTraces[selectedTraceIndex].commandId);
+          }
+        }
+      }
+    });
 
     function setLevelFilter(lvl) {
       currentLevel = lvl;
@@ -654,6 +924,18 @@
       }
     }
 
+    function formatDuration(seconds) {
+      const s = Math.floor(seconds || 0);
+      if (s < 60) return `${s}s`;
+      const d = Math.floor(s / 86400);
+      const h = Math.floor((s % 86400) / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const remSec = s % 60;
+      if (d > 0) return `${d}d ${h}h ${m}m`;
+      if (h > 0) return `${h}h ${m}m ${remSec}s`;
+      return `${m}m ${remSec}s`;
+    }
+
     async function fetchData() {
       try {
         const [overviewRes, logsRes, tracesRes] = await Promise.all([
@@ -667,7 +949,7 @@
           const workerBadge = document.getElementById('workerIdBadge');
           if (workerBadge) workerBadge.textContent = `worker: ${overview.workerId || 'chassis'}`;
           const uptime = document.getElementById('uptimeVal');
-          if (uptime) uptime.textContent = `${overview.uptimeSeconds || 0}s`;
+          if (uptime) uptime.textContent = formatDuration(overview.uptimeSeconds);
           const processed = document.getElementById('processedVal');
           if (processed) processed.textContent = (overview.processedEvents || 0).toLocaleString();
           const errors = document.getElementById('errorsVal');
@@ -695,7 +977,7 @@
                 }).join('');
 
                 return `<tr>
-                  <td style="font-weight: 600; font-size: 0.95rem;">⚡ ${escapeHtml(name)}</td>
+                  <td style="font-weight: 600; font-size: 0.95rem;">🚀 ${escapeHtml(name)}</td>
                   <td><code>${escapeHtml(c.mountPath || '/')}</code></td>
                   <td><span class="badge badge-info">${c.routesCount || 0} routes</span></td>
                   <td>${routesList || '<span style="color: var(--text-muted); font-size: 0.8rem;">None</span>'}</td>
@@ -726,7 +1008,7 @@
       const filter = (document.getElementById('traceSearchInput').value || '').toLowerCase();
       const tbody = document.getElementById('traceTableBody');
 
-      const filtered = allTraces.filter(t => {
+      currentFilteredTraces = allTraces.filter(t => {
         if (currentTraceStatus !== 'ALL') {
           if (t.status.toUpperCase() !== currentTraceStatus) return false;
         }
@@ -741,12 +1023,17 @@
           || ingress.toLowerCase().includes(filter);
       });
 
-      if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" style="color: var(--text-muted); padding: 1.5rem; text-align: center;">No matching traces recorded yet</td></tr>';
+      if (currentFilteredTraces.length === 0) {
+        selectedTraceIndex = -1;
+        tbody.innerHTML = '<tr><td colspan="8" style="color: var(--text-muted); padding: 1.5rem; text-align: center;">No matching traces recorded yet</td></tr>';
         return;
       }
 
-      tbody.innerHTML = filtered.map(t => {
+      if (selectedTraceIndex >= currentFilteredTraces.length) {
+        selectedTraceIndex = currentFilteredTraces.length - 1;
+      }
+
+      tbody.innerHTML = currentFilteredTraces.map((t, idx) => {
         let badgeCls = 'badge-completed';
         const st = (t.status || 'completed').toLowerCase();
         if (st === 'failed' || st === 'error') badgeCls = 'badge-failed';
@@ -759,11 +1046,12 @@
         const shortId = t.commandId ? (t.commandId.slice(0, 8) + '...' + t.commandId.slice(-6)) : 'unknown';
         const durationStr = (t.totalDurationMs !== undefined) ? `${t.totalDurationMs.toFixed(2)} ms` : '-';
         const timeStr = t.startedAt ? t.startedAt.split('T')[1].replace('Z', '').slice(0, 8) : '';
+        const isSelected = idx === selectedTraceIndex ? 'selected-row' : '';
 
-        return `<tr>
+        return `<tr class="trace-row ${isSelected}" data-index="${idx}" onclick="selectTraceRow(${idx}); inspectTrace('${t.commandId}')" title="Click or press Enter to inspect trace details">
           <td><span class="badge ${badgeCls}">${escapeHtml(t.status)}</span></td>
           <td><span class="badge ${ingressBadgeCls} badge-ingress-subtle">${ingressLabel}</span></td>
-          <td class="mono clickable" title="${escapeHtml(t.commandId)}" onclick="inspectTrace('${t.commandId}')" style="color: var(--accent);">${escapeHtml(shortId)}</td>
+          <td class="mono" title="${escapeHtml(t.commandId)}" style="color: var(--accent); font-weight: 600;">${escapeHtml(shortId)}</td>
           <td style="font-weight: 600;">${escapeHtml(t.operationName || '-')}</td>
           <td><code>${escapeHtml(t.topic || '-')}</code></td>
           <td class="mono">${durationStr}</td>
@@ -772,9 +1060,6 @@
             <span class="badge badge-purple">${t.hostCallCount || 0} host calls</span>
           </td>
           <td class="mono" style="color: var(--text-muted);">${timeStr}</td>
-          <td>
-            <button class="btn btn-secondary btn-sm" onclick="inspectTrace('${t.commandId}')">Inspect DAG</button>
-          </td>
         </tr>`;
       }).join('');
     }
@@ -828,12 +1113,13 @@
 
           const hostCallsHtml = (step.hostCalls || []).map(hc => {
             let hostBadgeCls = 'badge-info';
-            if (hc.callType.startsWith('db')) hostBadgeCls = 'badge-info';
-            else if (hc.callType.startsWith('checkpoint')) hostBadgeCls = 'badge-purple';
-            else if (hc.callType.startsWith('kv')) hostBadgeCls = 'badge-orange';
+            let hostIcon = '🔧';
+            if (hc.callType.startsWith('db')) { hostBadgeCls = 'badge-info'; hostIcon = '🗄️'; }
+            else if (hc.callType.startsWith('checkpoint')) { hostBadgeCls = 'badge-purple'; hostIcon = '📌'; }
+            else if (hc.callType.startsWith('kv')) { hostBadgeCls = 'badge-orange'; hostIcon = '🔑'; }
 
             return `<div class="host-call-item">
-              <span class="badge ${hostBadgeCls}">${escapeHtml(hc.callType)}</span>
+              <span class="badge ${hostBadgeCls}">${hostIcon} ${escapeHtml(hc.callType)}</span>
               <span style="color: var(--text);">${escapeHtml(hc.target || '')}</span>
               <span style="color: var(--accent); margin-left: auto;">${hc.durationUs || 0} μs</span>
               ${hc.detail ? `<span style="color: var(--text-muted); font-size: 0.75rem;">(${escapeHtml(hc.detail)})</span>` : ''}
@@ -849,7 +1135,7 @@
               <div class="dag-step-header">
                 <div class="dag-step-title">
                   <span class="badge badge-info">Step ${idx + 1}</span>
-                  <span style="color: #fff; font-size: 1rem;">⚡ ${escapeHtml(step.fluxcellName)}</span>
+                  <span style="color: #fff; font-size: 1rem;">🚀 ${escapeHtml(step.fluxcellName)}</span>
                   <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: 400;">(${escapeHtml(step.functionName || (isHttp ? 'handle_http' : 'handle_event'))})</span>
                 </div>
                 <div style="display: flex; gap: 0.5rem; align-items: center;">

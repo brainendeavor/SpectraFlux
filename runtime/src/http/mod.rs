@@ -420,7 +420,7 @@ where
             .unwrap());
     }
 
-    // Mini-Datadog Admin Dashboard UI
+    // Live Logs Admin Dashboard UI
     if path == "/admin" || path == "/admin/" || path == "/dashboard" {
         return Ok(Response::builder()
             .status(StatusCode::OK)
@@ -429,7 +429,7 @@ where
             .unwrap());
     }
 
-    // Mini-Datadog Admin Overview API
+    // Live Logs Admin Overview API
     if path == "/admin/api/v1/overview" {
         let uptime = telemetry.started_at.elapsed().as_secs();
         let processed = telemetry.processed_events.load(std::sync::atomic::Ordering::Relaxed);
@@ -1264,7 +1264,7 @@ mod tests {
         assert_eq!(resp.headers().get("Content-Type").unwrap(), "text/html; charset=utf-8");
         let html_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let html_str = String::from_utf8_lossy(&html_bytes);
-        assert!(html_str.contains("Mini-Datadog Active"));
+        assert!(html_str.contains("Live Logs Active"));
 
         let req = Request::builder().uri("/dashboard").body(Full::new(bytes::Bytes::new())).unwrap();
         let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();

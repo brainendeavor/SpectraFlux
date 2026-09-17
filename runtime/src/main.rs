@@ -18,7 +18,7 @@ use tokio::net::TcpListener;
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
-    log::info!("⚡ Initializing Spectral Flux Engine...");
+    log::info!("🚀 Initializing Spectral Flux Engine...");
 
     // 1. Load Configuration
     let config_path = std::env::var("FLUX_CONFIG").unwrap_or_else(|_| "spectral-flux.toml".to_string());
@@ -143,7 +143,7 @@ async fn main() -> Result<()> {
                 log::info!("Registered {} WASM routes for '{}' at '{}'", route_count, name, cell_cfg.mount_path);
                 telemetry.record_log(
                     "INFO",
-                    &format!("⚡ Fluxcell '{}' is ALIVE: mounted at '{}' with {} WASM route(s)", name, cell_cfg.mount_path, route_count),
+                    &format!("✨ Fluxcell '{}' is ALIVE: mounted at '{}' with {} WASM route(s)", name, cell_cfg.mount_path, route_count),
                     None,
                 );
             } else {
@@ -177,7 +177,7 @@ async fn main() -> Result<()> {
                 log::info!("Registered {} built-in routes for fluxcell '{}'", routes.len(), name);
                 telemetry.record_log(
                     "INFO",
-                    &format!("⚡ Fluxcell '{}' is ALIVE: mounted at '{}' with {} built-in route(s)", name, cell_cfg.mount_path, routes.len()),
+                    &format!("✨ Fluxcell '{}' is ALIVE: mounted at '{}' with {} built-in route(s)", name, cell_cfg.mount_path, routes.len()),
                     None,
                 );
             }
