@@ -127,23 +127,26 @@ impl BrokerConsumerAdapter for NatsConsumerAdapter {
             return Err(anyhow!("No subjects provided for NATS subscription"));
         }
 
-        // Subscribe to primary subject with queue group for load balancing across workers
-        let subject = subjects[0].clone();
-        let sub = self
-            .client
-            .queue_subscribe(subject, group.to_string())
-            .await
-            .map_err(|e| anyhow!("NATS queue_subscribe error: {}", e))?;
-
         use futures_util::StreamExt;
-        let stream = sub.map(|msg| BrokerMessage {
-            id: uuid::Uuid::now_v7().to_string(),
-            topic: msg.subject.to_string(),
-            payload: msg.payload.to_vec(),
-            delivery_attempt: 1,
-        });
+        let mut streams = Vec::new();
+        for subject in subjects {
+            let sub = self
+                .client
+                .queue_subscribe(subject.clone(), group.to_string())
+                .await
+                .map_err(|e| anyhow!("NATS queue_subscribe error for '{}': {}", subject, e))?;
 
-        Ok(Box::pin(stream))
+            let mapped = sub.map(|msg| BrokerMessage {
+                id: uuid::Uuid::now_v7().to_string(),
+                topic: msg.subject.to_string(),
+                payload: msg.payload.to_vec(),
+                delivery_attempt: 1,
+            });
+            streams.push(mapped);
+        }
+
+        let select_stream = futures_util::stream::select_all(streams);
+        Ok(Box::pin(select_stream))
     }
 
     async fn ack(&self, _message: &BrokerMessage) -> Result<()> {

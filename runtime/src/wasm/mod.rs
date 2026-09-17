@@ -650,7 +650,10 @@ impl WasmHost {
 
         // Extract command/event id from input for checkpoint scoping
         let cmd_id = input
-            .get("eventId")
+            .get("requestId")
+            .or_else(|| input.get("commandId"))
+            .or_else(|| input.get("command_id"))
+            .or_else(|| input.get("eventId"))
             .or_else(|| input.get("event-id"))
             .or_else(|| input.get("id"))
             .and_then(|v| v.as_str())
@@ -733,27 +736,25 @@ impl WasmHost {
 }
 
 pub fn topic_matches(pattern: &str, topic: &str) -> bool {
-    if pattern == topic || pattern == "*" || pattern == ">" {
+    if pattern == topic || pattern == ">" {
         return true;
     }
-    if pattern.ends_with(".>") {
-        let prefix = &pattern[..pattern.len() - 2];
-        return topic.starts_with(prefix);
-    }
-    if pattern.contains('*') {
-        let p_parts: Vec<&str> = pattern.split('.').collect();
-        let t_parts: Vec<&str> = topic.split('.').collect();
-        if p_parts.len() != t_parts.len() {
+    let p_parts: Vec<&str> = pattern.split('.').collect();
+    let t_parts: Vec<&str> = topic.split('.').collect();
+
+    for (i, p) in p_parts.iter().enumerate() {
+        if *p == ">" {
+            // '>' matches one or more remaining tokens at the end
+            return i < t_parts.len();
+        }
+        if i >= t_parts.len() {
             return false;
         }
-        for (p, t) in p_parts.iter().zip(t_parts.iter()) {
-            if *p != "*" && p != t {
-                return false;
-            }
+        if *p != "*" && *p != t_parts[i] {
+            return false;
         }
-        return true;
     }
-    false
+    p_parts.len() == t_parts.len()
 }
 
 impl Drop for WasmHost {
