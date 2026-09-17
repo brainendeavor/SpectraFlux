@@ -42,18 +42,111 @@ pub struct ResolvedExecutionConfig {
 
 impl Default for FluxConfig {
     fn default() -> Self {
-        Self::default_local()
+        Self {
+            port: default_port(),
+            host: default_host(),
+            broker: BrokerConfig::default(),
+            storage: StorageConfig::default(),
+            databases: HashMap::new(),
+            database: DatabaseConfig::default(),
+            gateway_admin_url: Some("http://127.0.0.1:8000".to_string()),
+            profiles: default_profiles(),
+            fluxcells: HashMap::new(),
+            deployer: DeployerConfig::default(),
+            resilience: ResilienceConfig::default(),
+        }
     }
 }
 
+fn default_fluxcells() -> HashMap<String, FluxcellConfig> {
+    let mut map = HashMap::new();
+    map.insert(
+        "magic_link".to_string(),
+        FluxcellConfig {
+            wasm_module: "fluxcells/magic_link.wasm".to_string(),
+            mount_path: "/auth".to_string(),
+            enabled: true,
+            subscriptions: Some(vec![
+                "auth.magic_link".to_string(),
+                "mutation.requestmagiclink".to_string(),
+            ]),
+            profile: Some("standard".to_string()),
+            timeout_ms: Some(5_000),
+            max_memory_mb: Some(16),
+            max_instances: Some(16),
+        },
+    );
+    map.insert(
+        "webhook".to_string(),
+        FluxcellConfig {
+            wasm_module: "fluxcells/webhook.wasm".to_string(),
+            mount_path: "/api/webhooks".to_string(),
+            enabled: true,
+            subscriptions: Some(vec![
+                "webhook.dispatch".to_string(),
+                "mutation.*".to_string(),
+            ]),
+            profile: Some("standard".to_string()),
+            timeout_ms: Some(5_000),
+            max_memory_mb: Some(16),
+            max_instances: Some(16),
+        },
+    );
+    map
+}
+
 impl FluxConfig {
+    pub fn resolve_config_path(path: &str) -> Option<String> {
+        let mut candidates = Vec::new();
+        candidates.push(path.to_string());
+        candidates.push(format!("{}.local", path));
+        if path.ends_with(".toml") {
+            candidates.push(path.replace(".toml", "-local.toml"));
+            candidates.push(path.replace(".toml", ".local.toml"));
+        }
+        if !path.starts_with("runtime/") {
+            candidates.push(format!("runtime/{}", path));
+            candidates.push(format!("runtime/{}.local", path));
+            if path.ends_with(".toml") {
+                candidates.push(format!("runtime/{}", path.replace(".toml", "-local.toml")));
+                candidates.push(format!("runtime/{}", path.replace(".toml", ".local.toml")));
+            }
+        }
+        for candidate in candidates {
+            if std::path::Path::new(&candidate).exists() {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    pub fn load_from_file_with_source(path: &str) -> Result<(Self, String)> {
+        if let Some(resolved_path) = Self::resolve_config_path(path) {
+            let settings = config::Config::builder()
+                .add_source(config::File::with_name(&resolved_path).format(config::FileFormat::Toml).required(true))
+                .add_source(config::Environment::with_prefix("FLUX").separator("__"))
+                .build()?;
+            let cfg: Self = settings.try_deserialize()?;
+            Ok((cfg, resolved_path))
+        } else if path == "spectral-flux.toml" || path == "nonexistent.toml" {
+            let settings = config::Config::builder()
+                .add_source(config::Environment::with_prefix("FLUX").separator("__"))
+                .build()?;
+            let env_cfg: Result<Self, _> = settings.try_deserialize();
+            match env_cfg {
+                Ok(cfg) => Ok((cfg, "environment overrides".to_string())),
+                Err(_) => Ok((Self::default_local(), "built-in default (in-memory)".to_string())),
+            }
+        } else {
+            Err(anyhow::anyhow!(
+                "Configuration file '{}' not found. Checked candidate locations: ['{}', '{}.local', 'runtime/{}', 'runtime/{}.local']",
+                path, path, path, path, path
+            ))
+        }
+    }
+
     pub fn load_from_file(path: &str) -> Result<Self> {
-        let settings = config::Config::builder()
-            .add_source(config::File::with_name(path).required(false))
-            .add_source(config::Environment::with_prefix("FLUX").separator("__"))
-            .build()?;
-        let cfg: Self = settings.try_deserialize()?;
-        Ok(cfg)
+        Self::load_from_file_with_source(path).map(|(cfg, _)| cfg)
     }
 
     pub fn from_toml_str(s: &str) -> Result<Self> {
@@ -74,10 +167,77 @@ impl FluxConfig {
             database: DatabaseConfig::default(),
             gateway_admin_url: Some("http://127.0.0.1:8000".to_string()),
             profiles: default_profiles(),
-            fluxcells: HashMap::new(),
+            fluxcells: default_fluxcells(),
             deployer: DeployerConfig::default(),
             resilience: ResilienceConfig::default(),
         }
+    }
+
+    pub fn to_sanitized_json(&self, config_source: &str) -> serde_json::Value {
+        let sanitize_db_url = |url: &str| -> String {
+            if let Some((prefix, rest)) = url.split_once('@') {
+                if let Some((scheme, user)) = prefix.split_once("://") {
+                    if user.contains(':') {
+                        let user_only = user.split_once(':').map(|(u, _)| u).unwrap_or(user);
+                        return format!("{}://{}:***@{}", scheme, user_only, rest);
+                    }
+                }
+                format!("***@{}", rest)
+            } else {
+                url.to_string()
+            }
+        };
+
+        let mut dbs = serde_json::Map::new();
+        for (name, db) in &self.databases {
+            dbs.insert(
+                name.clone(),
+                serde_json::json!({
+                    "url": sanitize_db_url(&db.url),
+                    "maxConnections": db.max_connections,
+                }),
+            );
+        }
+
+        let default_db = self.database.url.as_ref().map(|u| {
+            serde_json::json!({
+                "url": sanitize_db_url(u),
+                "maxConnections": self.database.max_connections,
+            })
+        });
+
+        serde_json::json!({
+            "configSource": config_source,
+            "host": self.host,
+            "port": self.port,
+            "gatewayAdminUrl": self.gateway_admin_url,
+            "broker": {
+                "method": self.broker.method,
+                "addr": self.broker.addr,
+                "stream": self.broker.stream,
+                "consumerGroup": self.broker.consumer_group,
+            },
+            "storage": {
+                "backend": self.storage.backend,
+                "addr": self.storage.addr,
+            },
+            "database": default_db,
+            "databases": dbs,
+            "profiles": self.profiles,
+            "deployer": {
+                "enabled": self.deployer.enabled,
+                "storageDir": self.deployer.storage_dir,
+                "externalDeployEnabled": self.deployer.external_deploy_enabled,
+                "devUploadEnabled": self.deployer.dev_upload_enabled,
+            },
+            "resilience": {
+                "maxRetries": self.resilience.max_retries,
+                "backoffInitialMs": self.resilience.backoff_initial_ms,
+                "backoffMaxMs": self.resilience.backoff_max_ms,
+                "dlqEnabled": self.resilience.dlq_enabled,
+                "dlqTopicPrefix": self.resilience.dlq_topic_prefix,
+            },
+        })
     }
 
     pub fn resolve_cell_execution(

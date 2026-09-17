@@ -19,6 +19,7 @@ pub fn handle_logs(telemetry: &TelemetryClient) -> Response<Full<bytes::Bytes>> 
 pub fn handle_overview(
     telemetry: &TelemetryClient,
     router: &RwLock<FluxRouter>,
+    config_summary: Option<&serde_json::Value>,
 ) -> Response<Full<bytes::Bytes>> {
     let uptime = telemetry.started_at.elapsed().as_secs();
     let processed = telemetry.processed_events.load(Ordering::Relaxed);
@@ -27,14 +28,25 @@ pub fn handle_overview(
         let r = router.read().unwrap_or_else(|e| e.into_inner());
         r.get_fluxcells_summary()
     };
-    let body = serde_json::json!({
+    let mut val = serde_json::json!({
         "workerId": telemetry.worker_id,
         "uptimeSeconds": uptime,
         "processedEvents": processed,
         "errors": errors,
         "fluxcells": cells,
     });
-    json_response(StatusCode::OK, body.to_string())
+    if let Some(cfg) = config_summary {
+        val["config"] = cfg.clone();
+    }
+    json_response(StatusCode::OK, val.to_string())
+}
+
+pub fn handle_config(config_summary: Option<&serde_json::Value>) -> Response<Full<bytes::Bytes>> {
+    if let Some(cfg) = config_summary {
+        json_response(StatusCode::OK, cfg.to_string())
+    } else {
+        json_response(StatusCode::OK, "{}".to_string())
+    }
 }
 
 pub async fn handle_traces(

@@ -533,6 +533,7 @@
       <div class="logo">SpectraFlux</div>
       <span class="badge badge-running">Live Logs Active</span>
       <span class="badge badge-info" id="workerIdBadge">worker: ...</span>
+      <span class="badge badge-purple" id="configSourceBadge" title="Resolved Configuration Source">config: ...</span>
     </div>
     <div style="display: flex; gap: 0.75rem; align-items: center;">
       <button class="btn btn-secondary btn-sm" onclick="toggleShortcutsModal(true)" title="Keyboard Shortcuts (?)">⌨️ Shortcuts</button>
@@ -580,6 +581,7 @@
     <button class="tab-btn" id="tabBtn-logs" onclick="switchTab('logs')">Live Logs</button>
     <button class="tab-btn" id="tabBtn-fluxcells" onclick="switchTab('fluxcells')">Fluxcells &amp; Routes</button>
     <button class="tab-btn" id="tabBtn-checkpoints" onclick="switchTab('checkpoints')">Step Checkpoints</button>
+    <button class="tab-btn" id="tabBtn-config" onclick="switchTab('config')">Chassis &amp; Config</button>
   </div>
 
   <!-- 1. Domain Operations (Traces) Tab -->
@@ -686,6 +688,108 @@
     </div>
   </div>
 
+  <!-- 5. Chassis & Config Tab -->
+  <div id="tab-config" style="display: none;">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+      <div class="stat-card">
+        <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: var(--accent); display: flex; align-items: center; gap: 0.5rem;">
+          <span>⚙️ Active Configuration Source</span>
+        </h3>
+        <div style="margin-bottom: 0.5rem;">
+          <div class="stat-label">File / Origin</div>
+          <code style="font-size: 0.85rem; color: #38bdf8; word-break: break-all; font-weight: 600;" id="cfgSourceVal">-</code>
+        </div>
+        <div style="display: flex; gap: 1.5rem; margin-top: 0.5rem;">
+          <div>
+            <div class="stat-label">Bind Host</div>
+            <code id="cfgHostVal">-</code>
+          </div>
+          <div>
+            <div class="stat-label">Port</div>
+            <code id="cfgPortVal">-</code>
+          </div>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: var(--info); display: flex; align-items: center; gap: 0.5rem;">
+          <span>📨 Message Broker Topology</span>
+        </h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+          <div>
+            <div class="stat-label">Method</div>
+            <span class="badge badge-info" id="cfgBrokerMethodVal">-</span>
+          </div>
+          <div>
+            <div class="stat-label">Consumer Group</div>
+            <code id="cfgBrokerGroupVal" style="font-size: 0.8rem;">-</code>
+          </div>
+          <div style="grid-column: span 2;">
+            <div class="stat-label">Broker Address</div>
+            <code id="cfgBrokerAddrVal" style="font-size: 0.825rem; word-break: break-all;">-</code>
+          </div>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: var(--orange); display: flex; align-items: center; gap: 0.5rem;">
+          <span>💾 Storage &amp; Database State</span>
+        </h3>
+        <div style="margin-bottom: 0.5rem;">
+          <div class="stat-label">KV Storage Backend</div>
+          <span class="badge badge-orange" id="cfgStorageBackendVal">-</span>
+        </div>
+        <div>
+          <div class="stat-label">PostgreSQL Database Pool</div>
+          <code id="cfgDatabaseVal" style="font-size: 0.8rem; word-break: break-all;">-</code>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: var(--purple); display: flex; align-items: center; gap: 0.5rem;">
+          <span>🛡️ Resilience &amp; Gateway Link</span>
+        </h3>
+        <div style="margin-bottom: 0.5rem;">
+          <div class="stat-label">Gateway Admin URL</div>
+          <code id="cfgGatewayUrlVal" style="font-size: 0.825rem;">-</code>
+        </div>
+        <div style="display: flex; gap: 1.5rem;">
+          <div>
+            <div class="stat-label">Max Retries</div>
+            <span class="badge badge-warn" id="cfgRetriesVal">-</span>
+          </div>
+          <div>
+            <div class="stat-label">DLQ Enabled</div>
+            <span class="badge badge-ok" id="cfgDlqVal">-</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Execution Profiles Table -->
+    <div class="stat-card" style="margin-bottom: 1.5rem;">
+      <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: var(--accent);">
+        ⚡ Active Wasm Execution Profiles
+      </h3>
+      <div class="table-container">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Profile Name</th>
+              <th>Timeout</th>
+              <th>Max Concurrency Instances</th>
+              <th>Offload Strategy</th>
+              <th>Max Memory</th>
+            </tr>
+          </thead>
+          <tbody id="profilesTableBody">
+            <tr><td colspan="5" style="color: var(--text-muted); padding: 1rem; text-align: center;">Loading execution profiles...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- Keyboard Shortcuts Cheatsheet Modal -->
   <div id="shortcutsModalBackdrop" onclick="toggleShortcutsModal(false)"></div>
   <div id="shortcutsModal">
@@ -703,6 +807,7 @@
           <kbd class="kbd-hint">2</kbd>
           <kbd class="kbd-hint">3</kbd>
           <kbd class="kbd-hint">4</kbd>
+          <kbd class="kbd-hint">5</kbd>
         </div>
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -771,6 +876,7 @@
       document.getElementById('tab-logs').style.display = tab === 'logs' ? 'block' : 'none';
       document.getElementById('tab-fluxcells').style.display = tab === 'fluxcells' ? 'block' : 'none';
       document.getElementById('tab-checkpoints').style.display = tab === 'checkpoints' ? 'block' : 'none';
+      document.getElementById('tab-config').style.display = tab === 'config' ? 'block' : 'none';
     }
 
     function toggleShortcutsModal(show) {
@@ -855,6 +961,7 @@
       if (e.key === '2') { switchTab('logs'); return; }
       if (e.key === '3') { switchTab('fluxcells'); return; }
       if (e.key === '4') { switchTab('checkpoints'); return; }
+      if (e.key === '5') { switchTab('config'); return; }
 
       if (currentTab === 'traces' && currentFilteredTraces.length > 0) {
         if (e.key === 'ArrowDown' || e.key === 'j') {
@@ -969,9 +1076,10 @@
                 const c = cells[name];
                 const routesList = (c.routes || []).map(r => {
                   const methodCls = r.method === 'GET' ? 'badge-info' : (r.method === 'POST' ? 'badge-completed' : 'badge-purple');
+                  const routePath = r.path || r.relative_path || '';
                   return `<div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.35rem;">
                     <span class="badge ${methodCls}" style="font-size: 0.7rem; padding: 0.15rem 0.4rem;">${escapeHtml(r.method)}</span>
-                    <code style="font-size: 0.825rem; color: var(--text);">${escapeHtml(c.mountPath || '')}${escapeHtml(r.relative_path || '')}</code>
+                    <code style="font-size: 0.825rem; color: var(--text);">${escapeHtml(c.mountPath || '')}${escapeHtml(routePath)}</code>
                     ${r.description ? `<span style="color: var(--text-muted); font-size: 0.75rem;">— ${escapeHtml(r.description)}</span>` : ''}
                   </div>`;
                 }).join('');
@@ -984,6 +1092,79 @@
                   <td><span class="badge badge-completed">Active</span></td>
                 </tr>`;
               }).join('');
+            }
+          }
+
+          const config = overview.config;
+          if (config) {
+            const configBadge = document.getElementById('configSourceBadge');
+            if (configBadge) {
+              configBadge.textContent = `cfg: ${config.configSource || 'default'}`;
+              configBadge.title = `Loaded from: ${config.configSource || 'default'}`;
+            }
+
+            const cfgSource = document.getElementById('cfgSourceVal');
+            if (cfgSource) cfgSource.textContent = config.configSource || 'built-in default';
+            const cfgHost = document.getElementById('cfgHostVal');
+            if (cfgHost) cfgHost.textContent = config.host || '0.0.0.0';
+            const cfgPort = document.getElementById('cfgPortVal');
+            if (cfgPort) cfgPort.textContent = config.port || 8081;
+
+            const b = config.broker || {};
+            const cfgBrokerMethod = document.getElementById('cfgBrokerMethodVal');
+            if (cfgBrokerMethod) cfgBrokerMethod.textContent = b.method || 'in_memory';
+            const cfgBrokerGroup = document.getElementById('cfgBrokerGroupVal');
+            if (cfgBrokerGroup) cfgBrokerGroup.textContent = b.consumerGroup || '-';
+            const cfgBrokerAddr = document.getElementById('cfgBrokerAddrVal');
+            if (cfgBrokerAddr) cfgBrokerAddr.textContent = b.addr || '-';
+
+            const s = config.storage || {};
+            const cfgStorageBackend = document.getElementById('cfgStorageBackendVal');
+            if (cfgStorageBackend) cfgStorageBackend.textContent = s.backend || 'embedded_kevy';
+
+            const cfgDb = document.getElementById('cfgDatabaseVal');
+            if (cfgDb) {
+              let dbSummary = 'None configured';
+              if (config.databases && Object.keys(config.databases).length > 0) {
+                dbSummary = Object.entries(config.databases)
+                  .map(([k, v]) => `${k}: ${v.url} (${v.maxConnections || 16} conns)`)
+                  .join(' | ');
+              } else if (config.database && config.database.url) {
+                dbSummary = `${config.database.url} (${config.database.maxConnections || 16} conns)`;
+              }
+              cfgDb.textContent = dbSummary;
+            }
+
+            const cfgGateway = document.getElementById('cfgGatewayUrlVal');
+            if (cfgGateway) cfgGateway.textContent = config.gatewayAdminUrl || 'None';
+
+            const res = config.resilience || {};
+            const cfgRetries = document.getElementById('cfgRetriesVal');
+            if (cfgRetries) {
+              cfgRetries.textContent = res.maxRetries !== undefined ? `${res.maxRetries} (initial ${res.backoffInitialMs || 200}ms)` : '3';
+            }
+            const cfgDlq = document.getElementById('cfgDlqVal');
+            if (cfgDlq) {
+              cfgDlq.textContent = res.dlqEnabled ? `Enabled (${res.dlqTopicPrefix || 'dlq.'}*)` : 'Disabled';
+              cfgDlq.className = res.dlqEnabled ? 'badge badge-ok' : 'badge badge-warn';
+            }
+
+            const profilesTbody = document.getElementById('profilesTableBody');
+            if (profilesTbody && config.profiles) {
+              const entries = Object.entries(config.profiles);
+              if (entries.length === 0) {
+                profilesTbody.innerHTML = '<tr><td colspan="5" style="color: var(--text-muted); padding: 1rem; text-align: center;">No execution profiles defined</td></tr>';
+              } else {
+                profilesTbody.innerHTML = entries.map(([name, p]) => `
+                  <tr>
+                    <td style="font-weight: 600; color: var(--accent);">⚡ ${escapeHtml(name)}</td>
+                    <td class="mono">${(p.timeout_ms || p.timeoutMs || 0).toLocaleString()} ms</td>
+                    <td><span class="badge badge-info">${p.max_instances || p.maxInstances || 16} instances</span></td>
+                    <td><code>${escapeHtml(p.offload || 'blocking_pool')}</code></td>
+                    <td>${p.max_memory_mb || p.maxMemoryMb ? `${p.max_memory_mb || p.maxMemoryMb} MB` : 'Default'}</td>
+                  </tr>
+                `).join('');
+              }
             }
           }
         }

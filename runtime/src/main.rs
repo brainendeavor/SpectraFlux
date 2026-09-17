@@ -5,7 +5,7 @@ use spectra_flux::broker::create_broker;
 use spectra_flux::config::FluxConfig;
 use spectra_flux::db::{DatabaseRegistry, PostgresDb};
 use spectra_flux::deployer::{DeployerGuard, DeployerRegistry, FluxcellDeployer, FluxcellStatus};
-use spectra_flux::http::{handle_request, FluxRouter, RouteDefinition};
+use spectra_flux::http::{FluxRouter, RouteDefinition};
 use spectra_flux::storage::create_storage;
 use spectra_flux::telemetry::TelemetryClient;
 use spectra_flux::wasm::{CircuitBreakerConfig, FluxcellWasmConfig, WasmHost};
@@ -22,16 +22,18 @@ async fn main() -> Result<()> {
 
     // 1. Load Configuration
     let config_path = std::env::var("FLUX_CONFIG").unwrap_or_else(|_| "spectral-flux.toml".to_string());
-    let config = match FluxConfig::load_from_file(&config_path) {
-        Ok(c) => {
-            log::info!("Loaded configuration from '{}'", config_path);
-            c
+    let (config, resolved_config_path) = match FluxConfig::load_from_file_with_source(&config_path) {
+        Ok(res) => {
+            log::info!("Loaded configuration from '{}'", res.1);
+            res
         }
         Err(e) => {
-            log::warn!("Could not load '{}' ({}), using default configuration", config_path, e);
-            FluxConfig::default_local()
+            log::warn!("Could not load '{}' ({}). Falling back to default configuration.", config_path, e);
+            (FluxConfig::default_local(), "built-in default (in-memory)".to_string())
         }
     };
+
+    let config_summary = Arc::new(config.to_sanitized_json(&resolved_config_path));
 
     let worker_id = format!("spectral-flux-{}", uuid::Uuid::now_v7());
     log::info!("Instance Worker ID: {}", worker_id);
@@ -280,6 +282,7 @@ async fn main() -> Result<()> {
     let wasm_dispatcher = wasm_host.clone();
     let deployer_arc = deployer.clone();
     let trace_storage_arc = trace_storage.clone();
+    let config_summary_arc = config_summary.clone();
 
     tokio::select! {
         _ = async {
@@ -298,16 +301,18 @@ async fn main() -> Result<()> {
                 let dispatcher_clone = wasm_dispatcher.clone();
                 let deployer_clone = deployer_arc.clone();
                 let trace_storage_clone = trace_storage_arc.clone();
+                let config_summary_clone = config_summary_arc.clone();
 
                 tokio::spawn(async move {
                     let service = hyper::service::service_fn(move |req| {
-                        handle_request(
+                        spectra_flux::http::handle_request_with_config(
                             req,
                             router_clone.clone(),
                             tele_clone.clone(),
                             dispatcher_clone.clone(),
                             deployer_clone.clone(),
                             Some(trace_storage_clone.clone()),
+                            Some(config_summary_clone.clone()),
                         )
                     });
 
