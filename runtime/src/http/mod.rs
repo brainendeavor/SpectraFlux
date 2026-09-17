@@ -11,6 +11,7 @@ pub const ADMIN_HTML: &str = include_str!("assets/admin.html");
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RouteDefinition {
     pub method: String,
+    #[serde(alias = "path")]
     pub relative_path: String,
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -266,12 +267,24 @@ impl FluxRouter {
     pub fn get_fluxcells_summary(&self) -> serde_json::Value {
         let mut cells = serde_json::Map::new();
         for (name, (mount, routes)) in &self.fluxcell_routes {
+            let routes_json: Vec<serde_json::Value> = routes
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "method": r.method,
+                        "path": r.relative_path,
+                        "relative_path": r.relative_path,
+                        "description": r.description,
+                        "timeoutMs": r.timeout_ms,
+                    })
+                })
+                .collect();
             cells.insert(
                 name.clone(),
                 serde_json::json!({
                     "mountPath": mount,
                     "routesCount": routes.len(),
-                    "routes": routes,
+                    "routes": routes_json,
                 }),
             );
         }
@@ -364,6 +377,23 @@ where
     B::Data: Send,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    handle_request_with_config(req, router, telemetry, dispatcher, deployer, trace_storage, None).await
+}
+
+pub async fn handle_request_with_config<B>(
+    req: Request<B>,
+    router: Arc<std::sync::RwLock<FluxRouter>>,
+    telemetry: Arc<crate::telemetry::TelemetryClient>,
+    dispatcher: Arc<dyn FluxcellHttpDispatcher>,
+    deployer: Option<Arc<crate::deployer::FluxcellDeployer>>,
+    trace_storage: Option<Arc<crate::telemetry::DomainTraceStorage>>,
+    config_summary: Option<Arc<serde_json::Value>>,
+) -> Result<Response<Full<bytes::Bytes>>, std::convert::Infallible>
+where
+    B: hyper::body::Body + Send + 'static,
+    B::Data: Send,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
     let method = req.method().to_string();
     let raw_path = req.uri().path().to_string();
     let query_string = req.uri().query().map(|q| q.to_string());
@@ -392,7 +422,10 @@ where
         return Ok(handlers::admin::handle_dashboard());
     }
     if path == "/admin/api/v1/overview" {
-        return Ok(handlers::admin::handle_overview(&telemetry, &router));
+        return Ok(handlers::admin::handle_overview(&telemetry, &router, config_summary.as_deref()));
+    }
+    if path == "/admin/api/v1/config" && method == "GET" {
+        return Ok(handlers::admin::handle_config(config_summary.as_deref()));
     }
     if path == "/admin/api/v1/traces" && method == "GET" {
         return Ok(handlers::admin::handle_traces(trace_storage.as_ref(), query_string.as_deref()).await);
@@ -1214,5 +1247,126 @@ mod tests {
         assert_eq!(trace.steps[0].fluxcell_name, "vote_cell");
         assert_eq!(trace.steps[0].host_calls.len(), 1);
         assert_eq!(trace.steps[0].host_calls[0].call_type, "db:execute");
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_404_records_trace() {
+        let router = Arc::new(std::sync::RwLock::new(FluxRouter::new()));
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "worker-test".to_string(),
+            "in_memory".to_string(),
+            None,
+            100,
+        ));
+        let mem_storage = Arc::new(crate::storage::KevyStorage::new_in_memory().unwrap());
+        let trace_storage = Arc::new(crate::telemetry::DomainTraceStorage::new(mem_storage));
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/nonexistent/endpoint")
+            .header("x-command-id", "0191f6a1-4040-7000-8000-000000000404")
+            .header("x-hlc", "2026-09-17T00:00:00.000Z-0002")
+            .header("content-type", "application/json")
+            .body(Full::new(bytes::Bytes::from(r#"{"operationName":"missingOp","data":"none"}"#)))
+            .unwrap();
+
+        let resp = handle_request(
+            req,
+            router.clone(),
+            telemetry.clone(),
+            Arc::new(MockDispatcher {
+                status: 200,
+                headers: vec![],
+                body: vec![],
+                should_fail: false,
+            }),
+            None,
+            Some(trace_storage.clone()),
+        ).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        // Allow trace task to finish
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let trace = trace_storage.get_trace("0191f6a1-4040-7000-8000-000000000404").await.unwrap();
+        assert!(trace.is_some(), "Expected 404 request to be recorded in DomainTraceStorage");
+        let trace = trace.unwrap();
+
+        assert_eq!(trace.command_id, "0191f6a1-4040-7000-8000-000000000404");
+        assert_eq!(trace.ingress, "HTTP");
+        assert_eq!(trace.topic, "http:/nonexistent/endpoint");
+        assert_eq!(trace.operation_name, "missingOp");
+        assert_eq!(trace.status, "failed");
+        assert!(trace.error.unwrap().contains("404 NOT_FOUND"));
+    }
+
+    #[tokio::test]
+    async fn test_admin_config_endpoint() {
+        let router = Arc::new(std::sync::RwLock::new(FluxRouter::new()));
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "worker-cfg-test".to_string(),
+            "in_memory".to_string(),
+            None,
+            100,
+        ));
+        let dispatcher = Arc::new(MockDispatcher {
+            status: 200,
+            headers: vec![],
+            body: vec![],
+            should_fail: false,
+        });
+
+        let cfg = crate::config::FluxConfig::default_local();
+        let config_summary = Arc::new(cfg.to_sanitized_json("test-config.toml"));
+
+        // Test GET /admin/api/v1/config
+        let req = Request::builder()
+            .method("GET")
+            .uri("/admin/api/v1/config")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+
+        let resp = handle_request_with_config(
+            req,
+            router.clone(),
+            telemetry.clone(),
+            dispatcher.clone(),
+            None,
+            None,
+            Some(config_summary.clone()),
+        ).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["configSource"], "test-config.toml");
+        assert_eq!(json["host"], "0.0.0.0");
+        assert_eq!(json["port"], 8081);
+        assert_eq!(json["broker"]["method"], "in_memory");
+        assert!(json["profiles"]["standard"].is_object());
+
+        // Test GET /admin/api/v1/overview includes config
+        let req = Request::builder()
+            .method("GET")
+            .uri("/admin/api/v1/overview")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+
+        let resp = handle_request_with_config(
+            req,
+            router.clone(),
+            telemetry.clone(),
+            dispatcher.clone(),
+            None,
+            None,
+            Some(config_summary.clone()),
+        ).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["workerId"], "worker-cfg-test");
+        assert_eq!(json["config"]["configSource"], "test-config.toml");
     }
 }

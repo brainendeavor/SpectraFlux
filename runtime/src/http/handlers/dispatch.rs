@@ -20,38 +20,10 @@ where
     B::Data: Send,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    // 1. Lookup route in FluxRouter (poison-safe lock recovery)
-    let (fluxcell_name, relative_path_matched) = {
-        let router_lock = router.read().unwrap_or_else(|e| e.into_inner());
-        match router_lock.lookup(method, path) {
-            Ok(m) => (m.fluxcell_name.to_string(), m.relative_path.to_string()),
-            Err(RouterError::NotFound { .. }) => {
-                return json_response(
-                    StatusCode::NOT_FOUND,
-                    "{\"error\":\"NOT_FOUND\",\"message\":\"No fluxcell route matches request\"}",
-                );
-            }
-            Err(RouterError::MethodNotAllowed { allowed, .. }) => {
-                let allow_header = allowed.join(", ");
-                return Response::builder()
-                    .status(StatusCode::METHOD_NOT_ALLOWED)
-                    .header("Content-Type", "application/json")
-                    .header("Allow", allow_header)
-                    .body(Full::new(bytes::Bytes::from(
-                        "{\"error\":\"METHOD_NOT_ALLOWED\"}",
-                    )))
-                    .unwrap_or_else(|_| Response::new(Full::new(bytes::Bytes::new())));
-            }
-            Err(e) => {
-                return json_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("{{\"error\":\"ROUTER_ERROR\",\"message\":\"{}\"}}", e),
-                );
-            }
-        }
-    };
+    let start_instant = std::time::Instant::now();
+    let started_at = chrono::Utc::now().to_rfc3339();
 
-    // 2. Collect headers & body
+    // 1. Collect headers & body
     let headers: Vec<(String, String)> = req
         .headers()
         .iter()
@@ -67,16 +39,6 @@ where
             );
         }
     };
-
-    // 3. Prepare path and tracing metadata
-    let relative_path = if let Some(q) = query_string {
-        format!("{}?{}", relative_path_matched, q)
-    } else {
-        relative_path_matched
-    };
-
-    let start_instant = std::time::Instant::now();
-    let started_at = chrono::Utc::now().to_rfc3339();
 
     let payload_val: serde_json::Value =
         serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null);
@@ -94,6 +56,7 @@ where
             payload_val
                 .get("commandId")
                 .or_else(|| payload_val.get("command_id"))
+                .or_else(|| payload_val.get("requestId"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
         })
@@ -125,6 +88,125 @@ where
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("{} {}", method, path));
+
+    // 2. Lookup route in FluxRouter (poison-safe lock recovery)
+    let (fluxcell_name, relative_path_matched) = {
+        let router_lock = router.read().unwrap_or_else(|e| e.into_inner());
+        match router_lock.lookup(method, path) {
+            Ok(m) => (m.fluxcell_name.to_string(), m.relative_path.to_string()),
+            Err(RouterError::NotFound { .. }) => {
+                let duration_ms = start_instant.elapsed().as_secs_f64() * 1000.0;
+                let completed_at = chrono::Utc::now().to_rfc3339();
+                telemetry.increment_error();
+                telemetry.record_log(
+                    "WARN",
+                    &format!("HTTP {} '{}' -> 404 NOT_FOUND: No fluxcell route matches request", method, path),
+                    Some(hlc.clone()),
+                );
+
+                if let Some(store) = trace_storage {
+                    let trace = crate::telemetry::DomainOperationTrace {
+                        command_id,
+                        hlc,
+                        topic: format!("http:{}", path),
+                        operation_name,
+                        ingress: "HTTP".to_string(),
+                        worker_id: "chassis-http".to_string(),
+                        status: "failed".to_string(),
+                        total_duration_ms: duration_ms,
+                        started_at: started_at.clone(),
+                        completed_at,
+                        initial_input: payload_val,
+                        steps: vec![crate::telemetry::FluxcellStepSpan {
+                            fluxcell_name: "router".to_string(),
+                            topic: format!("http:{}", path),
+                            function_name: "route_lookup".to_string(),
+                            start_time: started_at.clone(),
+                            duration_ms,
+                            status: "error".to_string(),
+                            input_preview: None,
+                            output_preview: None,
+                            error: Some("404 NOT_FOUND: No fluxcell route matches request".to_string()),
+                            host_calls: Vec::new(),
+                        }],
+                        terminal_output: None,
+                        error: Some("404 NOT_FOUND: No fluxcell route matches request".to_string()),
+                    };
+                    let store_clone = (*store).clone();
+                    tokio::spawn(async move {
+                        let _ = store_clone.record_trace(&trace).await;
+                    });
+                }
+
+                return json_response(
+                    StatusCode::NOT_FOUND,
+                    "{\"error\":\"NOT_FOUND\",\"message\":\"No fluxcell route matches request\"}",
+                );
+            }
+            Err(RouterError::MethodNotAllowed { allowed, .. }) => {
+                let allow_header = allowed.join(", ");
+                let duration_ms = start_instant.elapsed().as_secs_f64() * 1000.0;
+                let completed_at = chrono::Utc::now().to_rfc3339();
+                telemetry.increment_error();
+
+                if let Some(store) = trace_storage {
+                    let trace = crate::telemetry::DomainOperationTrace {
+                        command_id,
+                        hlc,
+                        topic: format!("http:{}", path),
+                        operation_name,
+                        ingress: "HTTP".to_string(),
+                        worker_id: "chassis-http".to_string(),
+                        status: "failed".to_string(),
+                        total_duration_ms: duration_ms,
+                        started_at: started_at.clone(),
+                        completed_at,
+                        initial_input: payload_val,
+                        steps: vec![crate::telemetry::FluxcellStepSpan {
+                            fluxcell_name: "router".to_string(),
+                            topic: format!("http:{}", path),
+                            function_name: "route_lookup".to_string(),
+                            start_time: started_at,
+                            duration_ms,
+                            status: "error".to_string(),
+                            input_preview: None,
+                            output_preview: None,
+                            error: Some(format!("405 METHOD_NOT_ALLOWED: Allowed: {}", allow_header)),
+                            host_calls: Vec::new(),
+                        }],
+                        terminal_output: None,
+                        error: Some(format!("405 METHOD_NOT_ALLOWED: Allowed: {}", allow_header)),
+                    };
+                    let store_clone = (*store).clone();
+                    tokio::spawn(async move {
+                        let _ = store_clone.record_trace(&trace).await;
+                    });
+                }
+
+                return Response::builder()
+                    .status(StatusCode::METHOD_NOT_ALLOWED)
+                    .header("Content-Type", "application/json")
+                    .header("Allow", allow_header)
+                    .body(Full::new(bytes::Bytes::from(
+                        "{\"error\":\"METHOD_NOT_ALLOWED\"}",
+                    )))
+                    .unwrap_or_else(|_| Response::new(Full::new(bytes::Bytes::new())));
+            }
+            Err(e) => {
+                return json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{{\"error\":\"ROUTER_ERROR\",\"message\":\"{}\"}}", e),
+                );
+            }
+        }
+    };
+
+    // 3. Prepare path and tracing metadata
+    let relative_path = if let Some(q) = query_string {
+        format!("{}?{}", relative_path_matched, q)
+    } else {
+        relative_path_matched
+    };
 
     // 4. Dispatch to Fluxcell guest via dispatcher
     match dispatcher
