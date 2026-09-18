@@ -73,6 +73,15 @@
 
 ---
 
+## Core Documentation
+
+- **[Chassis Runtime Architecture](docs/architecture.md)**: Wasmtime engine pooling, epoch interruption watchdog, and host capability imports (`host_db`, `kv_store`, `host_broker`).
+- **[Deployer & Security Governance](docs/deployer-and-governance.md)**: Zero-compiler container invariant (< 25 MB), dynamic staging API, SSRF shield, and emergency lockdown.
+- **[Durable Steps & Resilience](docs/durable-steps-and-resilience.md)**: 80/20 durable step memoization (`ctx.step`), exponential backoff, DLQ routing, and monotonic HLC causality guards.
+- **[Embedded Admin Console & Observability](docs/admin-dashboard.md)**: Real-time execution profiles (p50/p95/p99 latency, fuel, memory), 1GB allotment, sanitized config inspector, and live logs.
+
+---
+
 ## 3. Quick Start: Developing a Fluxcell in Rust
 
 Scaffold instantly via the CLI:
@@ -198,7 +207,60 @@ export {
 
 ---
 
-## 5. Building and Testing
+## 5. 80/20 Durable Step Checkpoints (`ctx.step`)
+
+SpectraFlux provides built-in 80/20 durable step memoization. If a worker fails midway through an event and retries, previously completed external side effects (e.g. Stripe payments, SMS delivery, third-party reservation APIs) are skipped by returning the cached output from the chassis host storage:
+
+```typescript
+const payment = ctx.step("stripe_charge", (): string => {
+  // Executed EXACTLY ONCE per command UUIDv7
+  return JSON.stringify({ chargeId: "ch_987", status: "success" });
+});
+```
+* **Host Storage Key:** `chk:<command_uuidv7>:<step_name>` with configurable TTL (default: 86,400s).
+
+---
+
+## 6. Level 1 Resilience: Exponential Backoff & DLQ Routing
+
+Transient failures automatically trigger exponential backoff with randomized jitter. If an event exceeds maximum retry attempts, SpectraFlux routes the poison message to a Dead-Letter Queue (`dlq.<topic_name>`) and cleanly ACKs the broker:
+
+```toml
+[resilience]
+max_retries = 3
+initial_backoff_ms = 100
+max_backoff_ms = 5000
+backoff_factor = 2.0
+jitter = true
+dlq_topic_prefix = "dlq."
+```
+
+---
+
+## 7. Embedded Admin Console & Execution Profiles (:8081)
+
+SpectraFlux includes an embedded observability and control plane at `http://localhost:8081/admin`:
+* **Real-time Latency Profiles:** Continuous rolling percentile latency graphs (p50, p95, p99), memory pages, and execution fuel metrics.
+* **1GB Profile Allotment:** High-capacity ring buffer for fine-grained performance sampling without disk exhaustion.
+* **Sanitized Configuration Viewer:** Live inspection of runtime settings, broker subjects, and database connection pools with sensitive credentials cryptographically masked.
+* **Live Logs & Domain Traces:** Zero-overhead streaming of chassis host logs and guest telemetry rollups.
+
+---
+
+## 8. 12-Factor Database Configuration
+
+PostgreSQL database connections can be configured dynamically at runtime via standard environment variables:
+```bash
+# Standard 12-factor connection string:
+export DATABASE_URL="postgres://user:password@db.host:5432/mydb?sslmode=require"
+
+# Or chassis-specific variable:
+export FLUX__DATABASE__URL="postgres://user:password@db.host:5432/mydb"
+```
+
+---
+
+## 9. Building and Testing
 
 ```bash
 # Run Rust tests across entire workspace

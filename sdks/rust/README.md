@@ -213,6 +213,22 @@ If `tx` goes out of scope without calling `.commit()`, the `Drop` implementation
 
 ---
 
+### 80/20 Durable Step Checkpoints (`step`)
+
+Prevents re-executing external non-idempotent side effects during event retries by persisting intermediate results to the host storage:
+
+```rust
+use fluxcell_sdk::prelude::*;
+
+// Executes closure ONLY ONCE per command UUIDv7; returns cached result on retries
+let charge_json = step(&event.event_id, "stripe_charge", || {
+    // Perform external HTTP call or mutation
+    Ok(serde_json::json!({ "charge_id": "ch_987", "status": "succeeded" }).to_string())
+})?;
+```
+
+---
+
 ### Causal Monotonicity & Watermark Engine (`CausalGuard`)
 
 When downstream databases lack native HLC support and only maintain low-precision timestamps (like PostgreSQL `updated_at TIMESTAMPTZ`), distributed out-of-order message delivery can cause state overwrites.

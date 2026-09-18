@@ -135,7 +135,7 @@ fluxcell deploy [OPTIONS]
 * `-g, --gateway <URL>`: Gateway GraphQL endpoint (default: `http://127.0.0.1:8000`, env: `SPECTRA_GATEWAY_URL`).
 * `-f, --flux-url <URL>`: Downstream chassis endpoint (default: `http://127.0.0.1:8081`, env: `SPECTRA_FLUX_URL`).
 * `-t, --token <TOKEN>`: Deployment authorization bearer token (env: `SPECTRA_DEPLOY_TOKEN`).
-* `-m, --mount <PATH>`: HTTP mount path in gateway/chassis radix tree (e.g. `/api/v1/auditor`).
+* `-m, --mount, --mount-path <PATH>`: HTTP mount path in gateway/chassis radix tree (e.g. `/api/v1/auditor`).
 * `-n, --name <NAME>`: Cell name (inferred from `Cargo.toml` if omitted).
 * `--artifact-url <URL>`: Remote HTTPS URL for production deployments (GitHub Releases, AWS S3, Cloudflare R2).
 * `--sha256 <HASH>`: Expected SHA-256 checksum (computed automatically if built locally).
