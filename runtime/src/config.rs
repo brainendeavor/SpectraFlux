@@ -70,10 +70,10 @@ fn default_fluxcells() -> HashMap<String, FluxcellConfig> {
                 "auth.magic_link".to_string(),
                 "mutation.requestmagiclink".to_string(),
             ]),
-            profile: Some("standard".to_string()),
-            timeout_ms: Some(5_000),
-            max_memory_mb: Some(16),
-            max_instances: Some(16),
+            profile: Some("extended".to_string()),
+            timeout_ms: None,
+            max_memory_mb: None,
+            max_instances: None,
         },
     );
     map.insert(
@@ -86,10 +86,10 @@ fn default_fluxcells() -> HashMap<String, FluxcellConfig> {
                 "webhook.dispatch".to_string(),
                 "mutation.*".to_string(),
             ]),
-            profile: Some("standard".to_string()),
-            timeout_ms: Some(5_000),
-            max_memory_mb: Some(16),
-            max_instances: Some(16),
+            profile: Some("extended".to_string()),
+            timeout_ms: None,
+            max_memory_mb: None,
+            max_instances: None,
         },
     );
     map
@@ -97,20 +97,28 @@ fn default_fluxcells() -> HashMap<String, FluxcellConfig> {
 
 impl FluxConfig {
     pub fn resolve_config_path(path: &str) -> Option<String> {
-        let mut candidates = Vec::new();
-        candidates.push(path.to_string());
-        candidates.push(format!("{}.local", path));
-        if path.ends_with(".toml") {
-            candidates.push(path.replace(".toml", "-local.toml"));
-            candidates.push(path.replace(".toml", ".local.toml"));
+        let mut base_paths = vec![path.to_string()];
+        if path.contains("spectral-") {
+            base_paths.push(path.replace("spectral-", "spectra-"));
         }
-        if !path.starts_with("runtime/") {
-            candidates.push(format!("runtime/{}", path));
-            candidates.push(format!("runtime/{}.local", path));
-            if path.ends_with(".toml") {
-                candidates.push(format!("runtime/{}", path.replace(".toml", "-local.toml")));
-                candidates.push(format!("runtime/{}", path.replace(".toml", ".local.toml")));
+        let mut candidates = Vec::new();
+        for p in &base_paths {
+            candidates.push(p.clone());
+            candidates.push(format!("{}.local", p));
+            if p.ends_with(".toml") {
+                candidates.push(p.replace(".toml", "-local.toml"));
+                candidates.push(p.replace(".toml", ".local.toml"));
             }
+            if !p.starts_with("runtime/") {
+                candidates.push(format!("runtime/{}", p));
+                candidates.push(format!("runtime/{}.local", p));
+                if p.ends_with(".toml") {
+                    candidates.push(format!("runtime/{}", p.replace(".toml", "-local.toml")));
+                    candidates.push(format!("runtime/{}", p.replace(".toml", ".local.toml")));
+                }
+            }
+            candidates.push(format!("../{}", p));
+            candidates.push(format!("../runtime/{}", p));
         }
         for candidate in candidates {
             if std::path::Path::new(&candidate).exists() {
@@ -121,12 +129,27 @@ impl FluxConfig {
     }
 
     pub fn load_from_file_with_source(path: &str) -> Result<(Self, String)> {
+        let apply_deployer_env = |cfg: &mut Self| {
+            if let Ok(v) = std::env::var("FLUX_DEPLOYER_ENABLED") {
+                if let Ok(b) = v.parse::<bool>() {
+                    cfg.deployer.enabled = b;
+                }
+            }
+        };
+
         if let Some(resolved_path) = Self::resolve_config_path(path) {
             let settings = config::Config::builder()
                 .add_source(config::File::with_name(&resolved_path).format(config::FileFormat::Toml).required(true))
                 .add_source(config::Environment::with_prefix("FLUX").separator("__"))
                 .build()?;
-            let cfg: Self = settings.try_deserialize()?;
+            let mut cfg: Self = settings.try_deserialize()?;
+            apply_deployer_env(&mut cfg);
+            for (k, v) in default_profiles() {
+                cfg.profiles.entry(k).or_insert(v);
+            }
+            for (k, v) in default_fluxcells() {
+                cfg.fluxcells.entry(k).or_insert(v);
+            }
             Ok((cfg, resolved_path))
         } else if path == "spectra-flux.toml" || path == "spectral-flux.toml" || path == "nonexistent.toml" {
             let settings = config::Config::builder()
@@ -134,8 +157,21 @@ impl FluxConfig {
                 .build()?;
             let env_cfg: Result<Self, _> = settings.try_deserialize();
             match env_cfg {
-                Ok(cfg) => Ok((cfg, "environment overrides".to_string())),
-                Err(_) => Ok((Self::default_local(), "built-in default (in-memory)".to_string())),
+                Ok(mut cfg) => {
+                    apply_deployer_env(&mut cfg);
+                    for (k, v) in default_profiles() {
+                        cfg.profiles.entry(k).or_insert(v);
+                    }
+                    for (k, v) in default_fluxcells() {
+                        cfg.fluxcells.entry(k).or_insert(v);
+                    }
+                    Ok((cfg, "environment overrides".to_string()))
+                }
+                Err(_) => {
+                    let mut cfg = Self::default_local();
+                    apply_deployer_env(&mut cfg);
+                    Ok((cfg, "built-in default (in-memory)".to_string()))
+                }
             }
         } else {
             Err(anyhow::anyhow!(
@@ -153,7 +189,13 @@ impl FluxConfig {
         let settings = config::Config::builder()
             .add_source(config::File::from_str(s, config::FileFormat::Toml))
             .build()?;
-        let cfg: Self = settings.try_deserialize()?;
+        let mut cfg: Self = settings.try_deserialize()?;
+        for (k, v) in default_profiles() {
+            cfg.profiles.entry(k).or_insert(v);
+        }
+        for (k, v) in default_fluxcells() {
+            cfg.fluxcells.entry(k).or_insert(v);
+        }
         Ok(cfg)
     }
 
@@ -168,7 +210,17 @@ impl FluxConfig {
             gateway_admin_url: Some("http://127.0.0.1:8000".to_string()),
             profiles: default_profiles(),
             fluxcells: default_fluxcells(),
-            deployer: DeployerConfig::default(),
+            deployer: DeployerConfig {
+                enabled: true,
+                external_deploy_enabled: true,
+                dev_upload_enabled: true,
+                auto_activate: true,
+                allowed_artifact_hosts: Vec::new(),
+                require_https: false,
+                block_private_networks: false,
+                max_wasm_size_bytes: default_max_wasm_size(),
+                storage_dir: default_storage_dir(),
+            },
             resilience: ResilienceConfig::default(),
         }
     }
@@ -206,6 +258,21 @@ impl FluxConfig {
             })
         });
 
+        let mut fcells = serde_json::Map::new();
+        for (name, cell) in &self.fluxcells {
+            fcells.insert(
+                name.clone(),
+                serde_json::json!({
+                    "mountPath": cell.mount_path,
+                    "profile": cell.profile.as_deref().unwrap_or("standard"),
+                    "enabled": cell.enabled,
+                    "timeoutMs": cell.timeout_ms,
+                    "maxMemoryMb": cell.max_memory_mb,
+                    "maxInstances": cell.max_instances,
+                }),
+            );
+        }
+
         serde_json::json!({
             "configSource": config_source,
             "host": self.host,
@@ -224,6 +291,7 @@ impl FluxConfig {
             "database": default_db,
             "databases": dbs,
             "profiles": self.profiles,
+            "fluxcells": fcells,
             "deployer": {
                 "enabled": self.deployer.enabled,
                 "storageDir": self.deployer.storage_dir,
@@ -469,27 +537,27 @@ pub fn default_profiles() -> HashMap<String, ExecutionProfileConfig> {
         "standard".to_string(),
         ExecutionProfileConfig {
             timeout_ms: 10_000,
-            max_instances: 16,
+            max_instances: 12,
             offload: OffloadStrategy::BlockingPool,
-            max_memory_mb: Some(16),
+            max_memory_mb: Some(32),
         },
     );
     m.insert(
         "extended".to_string(),
         ExecutionProfileConfig {
             timeout_ms: 120_000,
-            max_instances: 4,
+            max_instances: 8,
             offload: OffloadStrategy::BlockingPool,
-            max_memory_mb: Some(32),
+            max_memory_mb: Some(64),
         },
     );
     m.insert(
         "batch".to_string(),
         ExecutionProfileConfig {
             timeout_ms: 300_000,
-            max_instances: 2,
+            max_instances: 1,
             offload: OffloadStrategy::DedicatedWorker,
-            max_memory_mb: Some(64),
+            max_memory_mb: Some(128),
         },
     );
     m
@@ -761,19 +829,19 @@ mod tests {
 
         let std_prof = &cfg.profiles["standard"];
         assert_eq!(std_prof.timeout_ms, 10_000);
-        assert_eq!(std_prof.max_instances, 16);
+        assert_eq!(std_prof.max_instances, 12);
         assert_eq!(std_prof.offload, OffloadStrategy::BlockingPool);
         assert!(std_prof.validate("standard").is_ok());
 
         let ext_prof = &cfg.profiles["extended"];
         assert_eq!(ext_prof.timeout_ms, 120_000);
-        assert_eq!(ext_prof.max_instances, 4);
+        assert_eq!(ext_prof.max_instances, 8);
         assert_eq!(ext_prof.offload, OffloadStrategy::BlockingPool);
         assert!(ext_prof.validate("extended").is_ok());
 
         let batch_prof = &cfg.profiles["batch"];
         assert_eq!(batch_prof.timeout_ms, 300_000);
-        assert_eq!(batch_prof.max_instances, 2);
+        assert_eq!(batch_prof.max_instances, 1);
         assert_eq!(batch_prof.offload, OffloadStrategy::DedicatedWorker);
         assert!(batch_prof.validate("batch").is_ok());
     }
@@ -795,9 +863,9 @@ mod tests {
         let resolved = cfg.resolve_cell_execution("test_cell", &cell, None, None, None).unwrap();
         assert_eq!(resolved.profile, "extended");
         assert_eq!(resolved.timeout_ms, 120_000);
-        assert_eq!(resolved.max_instances, 4);
+        assert_eq!(resolved.max_instances, 8);
         assert_eq!(resolved.offload, OffloadStrategy::BlockingPool);
-        assert_eq!(resolved.max_memory_bytes, 32 * 1024 * 1024);
+        assert_eq!(resolved.max_memory_bytes, 64 * 1024 * 1024);
     }
 
     #[test]
@@ -818,7 +886,7 @@ mod tests {
         let resolved = cfg.resolve_cell_execution("test_cell", &cell, Some("batch"), None, None).unwrap();
         assert_eq!(resolved.profile, "batch");
         assert_eq!(resolved.timeout_ms, 300_000);
-        assert_eq!(resolved.max_instances, 2);
+        assert_eq!(resolved.max_instances, 1);
         assert_eq!(resolved.offload, OffloadStrategy::DedicatedWorker);
     }
 

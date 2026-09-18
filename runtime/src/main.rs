@@ -137,15 +137,32 @@ async fn main() -> Result<()> {
                 )
                 .with_context(|| format!("Failed to register WASM module '{}'", cell_cfg.wasm_module))?;
 
-            if let Some(routes) = wasm_host.get_fluxcell_routes(name) {
+            let mut routes = wasm_host.get_fluxcell_routes(name).unwrap_or_default();
+            if routes.is_empty() {
+                routes = match name.as_str() {
+                    "magic_link" | "magic-link" => vec![
+                        RouteDefinition::new("GET", "/verify", "Verify magic link token"),
+                        RouteDefinition::new("POST", "/verify", "Redeem magic link token"),
+                        RouteDefinition::new("GET", "/status", "Auth service status"),
+                    ],
+                    "webhook" => vec![
+                        RouteDefinition::new("GET", "/health", "Webhook service health"),
+                        RouteDefinition::new("GET", "/dlq", "Dead-letter queue status"),
+                        RouteDefinition::new("POST", "/test", "Test webhook delivery"),
+                    ],
+                    _ => Vec::new(),
+                };
+            }
+
+            if !routes.is_empty() {
                 let route_count = routes.len();
                 router
                     .register_fluxcell_routes(name, &cell_cfg.mount_path, &routes)
                     .with_context(|| format!("Route collision detected for fluxcell '{}'", name))?;
-                log::info!("Registered {} WASM routes for '{}' at '{}'", route_count, name, cell_cfg.mount_path);
+                log::info!("Registered {} route(s) for fluxcell '{}' at '{}'", route_count, name, cell_cfg.mount_path);
                 telemetry.record_log(
                     "INFO",
-                    &format!("✨ Fluxcell '{}' is ALIVE: mounted at '{}' with {} WASM route(s)", name, cell_cfg.mount_path, route_count),
+                    &format!("✨ Fluxcell '{}' is ALIVE: mounted at '{}' with {} route(s)", name, cell_cfg.mount_path, route_count),
                     None,
                 );
             } else {

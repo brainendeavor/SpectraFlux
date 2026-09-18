@@ -30,7 +30,7 @@ timeout_ms = 120000
 offload = "blocking_pool"
 
 [profiles.batch]
-max_instances = 2
+max_instances = 1
 max_memory_mb = 128
 timeout_ms = 300000
 offload = "dedicated_worker"
