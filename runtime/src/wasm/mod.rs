@@ -134,6 +134,18 @@ impl Default for FluxcellWasmConfig {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct GuestMetadata {
+    pub subscriptions: Vec<String>,
+    pub routes: Vec<crate::http::RouteDefinition>,
+    pub version: Option<String>,
+    pub git_hash: Option<String>,
+    pub build_time: Option<String>,
+    pub profile: Option<String>,
+    pub timeout_ms: Option<u64>,
+    pub max_memory_mb: Option<usize>,
+}
+
 struct RegisteredFluxcell {
     #[allow(dead_code)]
     name: String,
@@ -287,14 +299,12 @@ impl WasmHost {
         Ok(())
     }
 
-    fn query_guest_metadata(
+    pub fn inspect_guest_metadata(
         &self,
         module: &Module,
         config: &FluxcellWasmConfig,
-    ) -> Result<(Vec<String>, Vec<crate::http::RouteDefinition>)> {
-        // Query get-subscriptions and get-routes if exported by module
-        let mut subscriptions = Vec::new();
-        let mut routes = Vec::new();
+    ) -> Result<GuestMetadata> {
+        let mut meta = GuestMetadata::default();
 
         let limits = StoreLimitsBuilder::new()
             .memory_size(config.max_memory_bytes)
@@ -312,61 +322,107 @@ impl WasmHost {
         let mut store = Store::new(&self.engine, host_state);
         store.limiter(|s| &mut s.limits);
 
-        // Epoch deadline is mandatory when epoch_interruption is enabled on Engine
         let deadline_ticks = (config.timeout_ms / self.epoch_tick_interval_ms.max(1)).max(10);
         store.set_epoch_deadline(deadline_ticks);
 
-        match self.create_linker() {
-            Ok(linker) => match linker.instantiate(&mut store, module) {
-                Ok(instance) => {
-                    // Attempt to query get_subscriptions
-                    if let Ok(func) = instance.get_typed_func::<(), u64>(&mut store, "get_subscriptions") {
-                        if let Ok(packed) = func.call(&mut store, ()) {
-                            if let Ok(json_str) = self.read_guest_memory_string(&mut store, &instance, packed) {
-                                if let Ok(subs) = serde_json::from_str::<Vec<String>>(&json_str) {
-                                    subscriptions = subs;
-                                }
-                            }
-                        }
-                    }
-
-                    // Attempt to query get_routes
-                    if let Ok(func) = instance.get_typed_func::<(), u64>(&mut store, "get_routes") {
-                        if let Ok(packed) = func.call(&mut store, ()) {
-                            if let Ok(json_str) = self.read_guest_memory_string(&mut store, &instance, packed) {
-                                #[derive(serde::Deserialize)]
-                                struct RouteMeta {
-                                    method: String,
-                                    path: String,
-                                    description: String,
-                                    #[serde(default)]
-                                    timeout_ms: Option<u64>,
-                                }
-                                if let Ok(r_list) = serde_json::from_str::<Vec<RouteMeta>>(&json_str) {
-                                    routes = r_list
-                                        .into_iter()
-                                        .map(|r| crate::http::RouteDefinition {
-                                            method: r.method,
-                                            relative_path: r.path,
-                                            description: r.description,
-                                            timeout_ms: r.timeout_ms,
-                                        })
-                                        .collect();
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!("query_module_reflection: failed to instantiate module: {:#}", e);
-                }
-            },
+        let linker = self.create_linker()?;
+        let instance = match linker.instantiate(&mut store, module) {
+            Ok(inst) => inst,
             Err(e) => {
-                log::warn!("query_module_reflection: failed to create linker: {:#}", e);
+                log::warn!("inspect_guest_metadata: linker failed to instantiate module: {:#}", e);
+                return Ok(meta);
+            }
+        };
+
+        // Query get_subscriptions
+        if let Ok(func) = instance.get_typed_func::<(), u64>(&mut store, "get_subscriptions") {
+            if let Ok(packed) = func.call(&mut store, ()) {
+                if let Ok(json_str) = self.read_guest_memory_string(&mut store, &instance, packed) {
+                    if let Ok(subs) = serde_json::from_str::<Vec<String>>(&json_str) {
+                        meta.subscriptions = subs;
+                    }
+                }
             }
         }
 
-        Ok((subscriptions, routes))
+        // Query get_routes
+        if let Ok(func) = instance.get_typed_func::<(), u64>(&mut store, "get_routes") {
+            if let Ok(packed) = func.call(&mut store, ()) {
+                if let Ok(json_str) = self.read_guest_memory_string(&mut store, &instance, packed) {
+                    #[derive(serde::Deserialize)]
+                    struct RouteMeta {
+                        method: String,
+                        path: String,
+                        description: String,
+                        #[serde(default)]
+                        timeout_ms: Option<u64>,
+                    }
+                    if let Ok(r_list) = serde_json::from_str::<Vec<RouteMeta>>(&json_str) {
+                        meta.routes = r_list
+                            .into_iter()
+                            .map(|r| crate::http::RouteDefinition {
+                                method: r.method,
+                                relative_path: r.path,
+                                description: r.description,
+                                timeout_ms: r.timeout_ms,
+                            })
+                            .collect();
+                    }
+                }
+            }
+        }
+
+        // Query get_config
+        if let Ok(func) = instance.get_typed_func::<(), u64>(&mut store, "get_config") {
+            if let Ok(packed) = func.call(&mut store, ()) {
+                if let Ok(json_str) = self.read_guest_memory_string(&mut store, &instance, packed) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                        if let Some(p) = val.get("profile").and_then(|v| v.as_str()) {
+                            meta.profile = Some(p.to_string());
+                        }
+                        if let Some(t) = val.get("timeout_ms").and_then(|v| v.as_u64()) {
+                            meta.timeout_ms = Some(t);
+                        }
+                        if let Some(m) = val.get("max_memory_mb").and_then(|v| v.as_u64()) {
+                            meta.max_memory_mb = Some(m as usize);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Query get_metadata
+        if let Ok(func) = instance.get_typed_func::<(), u64>(&mut store, "get_metadata") {
+            if let Ok(packed) = func.call(&mut store, ()) {
+                if let Ok(json_str) = self.read_guest_memory_string(&mut store, &instance, packed) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                        meta.version = val.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        meta.git_hash = val.get("git_hash").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        meta.build_time = val.get("build_time").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        if meta.profile.is_none() {
+                            meta.profile = val.get("profile").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        }
+                        if meta.timeout_ms.is_none() {
+                            meta.timeout_ms = val.get("timeout_ms").and_then(|v| v.as_u64());
+                        }
+                        if meta.max_memory_mb.is_none() {
+                            meta.max_memory_mb = val.get("max_memory_mb").and_then(|v| v.as_u64()).map(|m| m as usize);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(meta)
+    }
+
+    fn query_guest_metadata(
+        &self,
+        module: &Module,
+        config: &FluxcellWasmConfig,
+    ) -> Result<(Vec<String>, Vec<crate::http::RouteDefinition>)> {
+        let meta = self.inspect_guest_metadata(module, config)?;
+        Ok((meta.subscriptions, meta.routes))
     }
 
     fn read_guest_memory_string(
