@@ -128,7 +128,7 @@ impl FluxConfig {
                 .build()?;
             let cfg: Self = settings.try_deserialize()?;
             Ok((cfg, resolved_path))
-        } else if path == "spectral-flux.toml" || path == "nonexistent.toml" {
+        } else if path == "spectra-flux.toml" || path == "spectral-flux.toml" || path == "nonexistent.toml" {
             let settings = config::Config::builder()
                 .add_source(config::Environment::with_prefix("FLUX").separator("__"))
                 .build()?;
@@ -349,7 +349,7 @@ fn default_broker_addr() -> String {
 }
 
 fn default_consumer_group() -> String {
-    "spectral-flux-workers".to_string()
+    "spectra-flux-workers".to_string()
 }
 
 impl Default for BrokerConfig {
@@ -624,7 +624,7 @@ mod tests {
         assert_eq!(cfg.host, "0.0.0.0");
         assert_eq!(cfg.broker.method, "in_memory");
         assert_eq!(cfg.broker.addr, "localhost");
-        assert_eq!(cfg.broker.consumer_group, "spectral-flux-workers");
+        assert_eq!(cfg.broker.consumer_group, "spectra-flux-workers");
         assert_eq!(cfg.storage.backend, "embedded_kevy");
         assert_eq!(cfg.storage.addr, None);
         assert_eq!(cfg.gateway_admin_url, Some("http://127.0.0.1:8000".to_string()));

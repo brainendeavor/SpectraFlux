@@ -1,4 +1,4 @@
-# Spectral Flux Default Configuration
+# SpectraFlux Default Configuration
 
 port = 8081
 host = "0.0.0.0"
@@ -7,7 +7,7 @@ gateway_admin_url = "http://127.0.0.1:8000"
 [broker]
 method = "nats"
 addr = "nats://127.0.0.1:4222"
-consumer_group = "spectral-flux-workers"
+consumer_group = "spectra-flux-workers"
 
 [storage]
 backend = "embedded_kevy"

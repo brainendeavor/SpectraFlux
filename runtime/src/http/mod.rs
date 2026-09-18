@@ -935,7 +935,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_request_deployer_governance_and_lockdown() {
-        let temp_dir = std::env::temp_dir().join(format!("spectral_deploy_http_{}", uuid::Uuid::new_v4()));
+        let temp_dir = std::env::temp_dir().join(format!("spectra_deploy_http_{}", uuid::Uuid::new_v4()));
         let mut dep_cfg = crate::config::DeployerConfig::default();
         dep_cfg.enabled = true;
         dep_cfg.storage_dir = temp_dir.to_string_lossy().to_string();
@@ -1004,7 +1004,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_request_deployer_upload_with_mount_path_and_auto_activate() {
-        let temp_dir = std::env::temp_dir().join(format!("spectral_deploy_upload_{}", uuid::Uuid::new_v4()));
+        let temp_dir = std::env::temp_dir().join(format!("spectra_deploy_upload_{}", uuid::Uuid::new_v4()));
         let mut dep_cfg = crate::config::DeployerConfig::default();
         dep_cfg.enabled = true;
         dep_cfg.storage_dir = temp_dir.to_string_lossy().to_string();

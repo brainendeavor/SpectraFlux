@@ -49,7 +49,7 @@ pub enum Commands {
         #[arg(long, default_value_t = true)]
         release: bool,
     },
-    /// Deploy the Fluxcell to a SpectraGQL gateway or Spectral Flux appliance
+    /// Deploy the Fluxcell to a SpectraGQL gateway or SpectraFlux appliance
     Deploy {
         /// Gateway GraphQL endpoint
         #[arg(short, long, default_value = "http://127.0.0.1:8000", env = "SPECTRA_GATEWAY_URL")]
@@ -392,7 +392,7 @@ pub async fn run_deploy(
             req = req.header("Authorization", format!("Bearer {t}"));
         }
 
-        let resp = req.send().await.context("Failed to connect to Spectral Flux chassis")?;
+        let resp = req.send().await.context("Failed to connect to SpectraFlux chassis")?;
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
 
@@ -466,7 +466,7 @@ pub async fn query_status(endpoint: &str) -> Result<()> {
     }
 
     println!("─────────────────────────────────────────────────────────────");
-    println!("  SPECTRAL FLUX STATUS & GOVERNANCE");
+    println!("  SPECTRAFLUX STATUS & GOVERNANCE");
     println!("─────────────────────────────────────────────────────────────");
     if let Some(guard) = body.get("guard") {
         println!("  Killswitch (External Deploy): {}", guard["external_deploy_enabled"]);

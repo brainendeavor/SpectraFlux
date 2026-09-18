@@ -222,7 +222,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kevy_storage_persistence() {
-        let temp_dir = std::env::temp_dir().join(format!("spectral_kevy_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir = std::env::temp_dir().join(format!("spectra_kevy_test_{}", uuid::Uuid::new_v4()));
         let db_path = temp_dir.to_str().unwrap().to_string();
 
         {
@@ -260,7 +260,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_storage_adversarial_corrupted_disk_file() {
-        let temp_dir = std::env::temp_dir().join(format!("spectral_corrupt_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir = std::env::temp_dir().join(format!("spectra_corrupt_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         let db_file = temp_dir.join("corrupted.db");
         // Write raw garbage into the persistent file

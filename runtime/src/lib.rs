@@ -1,4 +1,4 @@
-//! Spectral Flux: The High-Velocity Streaming Execution Chassis and Fluxcell Harness for SpectraGQL
+//! SpectraFlux: The High-Velocity Streaming Execution Chassis and Fluxcell Harness for SpectraGQL
 
 pub mod broker;
 pub mod config;

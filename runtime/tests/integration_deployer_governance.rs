@@ -24,7 +24,7 @@ fn create_valid_wasm() -> Vec<u8> {
 
 #[tokio::test]
 async fn test_deployer_full_staging_and_activation_lifecycle() {
-    let temp_dir = std::env::temp_dir().join(format!("spectral_test_deploy_{}", uuid::Uuid::new_v4()));
+    let temp_dir = std::env::temp_dir().join(format!("spectra_test_deploy_{}", uuid::Uuid::new_v4()));
     let mut config = DeployerConfig::default();
     config.enabled = true;
     config.storage_dir = temp_dir.to_string_lossy().to_string();
@@ -94,7 +94,7 @@ async fn test_deployer_full_staging_and_activation_lifecycle() {
 
 #[tokio::test]
 async fn test_deployer_lockdown_terminates_ingress() {
-    let temp_dir = std::env::temp_dir().join(format!("spectral_lockdown_test_{}", uuid::Uuid::new_v4()));
+    let temp_dir = std::env::temp_dir().join(format!("spectra_lockdown_test_{}", uuid::Uuid::new_v4()));
     let config = DeployerConfig {
         enabled: true,
         storage_dir: temp_dir.to_string_lossy().to_string(),
@@ -174,7 +174,7 @@ fn test_ssrf_forbidden_ip_boundaries() {
 
 #[tokio::test]
 async fn test_deployer_sha256_mismatch_rejection() {
-    let temp_dir = std::env::temp_dir().join(format!("spectral_sha_test_{}", uuid::Uuid::new_v4()));
+    let temp_dir = std::env::temp_dir().join(format!("spectra_sha_test_{}", uuid::Uuid::new_v4()));
     let config = DeployerConfig {
         enabled: true,
         storage_dir: temp_dir.to_string_lossy().to_string(),

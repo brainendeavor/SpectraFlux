@@ -1,6 +1,6 @@
 //! Canonical Reference Fluxcell: Invoice Mailer & Webhook Service
 //!
-//! Demonstrates the complete guest interface for SpectraGQL / Spectral Flux:
+//! Demonstrates the complete guest interface for SpectraGQL / SpectraFlux:
 //! - Automated semantic versioning and git SHA derivation
 //! - Dynamic HTTP routes (`POST /send`, `GET /status`, `GET /templates`)
 //! - Event stream subscriptions (`billing.invoice.created`, `mutation.sendinvoice`)

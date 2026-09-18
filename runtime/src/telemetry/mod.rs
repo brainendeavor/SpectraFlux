@@ -119,7 +119,7 @@ impl TelemetryClient {
         let last_hlc = self.last_hlc.lock().ok().and_then(|h| h.clone());
         WorkerTelemetryReport {
             worker_id: self.worker_id.clone(),
-            app_id: Some("spectral-flux".to_string()),
+            app_id: Some("spectra-flux".to_string()),
             sink: Some(self.sink.clone()),
             stream: self.stream.clone(),
             status: Some("running".to_string()),
@@ -216,7 +216,7 @@ mod tests {
 
         // Verify camelCase JSON keys matching gateway WorkerRegistry schema
         assert_eq!(json_val["workerId"], "flux-worker-7");
-        assert_eq!(json_val["appId"], "spectral-flux");
+        assert_eq!(json_val["appId"], "spectra-flux");
         assert_eq!(json_val["sink"], "kafka");
         assert_eq!(json_val["stream"], "mutations.v1");
         assert_eq!(json_val["status"], "running");

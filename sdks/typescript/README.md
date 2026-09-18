@@ -359,7 +359,7 @@ bun run verify
 ```
 
 ### `fluxcell-deploy`
-Deploys the compiled Fluxcell to a running SpectraGQL gateway or directly to the downstream Spectral Flux chassis:
+Deploys the compiled Fluxcell to a running SpectraGQL gateway or directly to the downstream SpectraFlux chassis:
 ```bash
 # Direct local dev upload
 node ./node_modules/@spectraflux/sdk/bin/deploy.mjs --dev-upload --mount /api/v1/orders

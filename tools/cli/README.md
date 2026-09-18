@@ -125,7 +125,7 @@ fluxcell build [OPTIONS]
 ---
 
 ### `fluxcell deploy`
-Deploys the Fluxcell to a SpectraGQL gateway or directly to a downstream Spectral Flux runtime chassis.
+Deploys the Fluxcell to a SpectraGQL gateway or directly to a downstream SpectraFlux runtime chassis.
 
 ```bash
 fluxcell deploy [OPTIONS]
@@ -157,7 +157,7 @@ fluxcell status [OPTIONS]
 #### Example Output
 ```
 ─────────────────────────────────────────────────────────────
-  SPECTRAL FLUX STATUS & GOVERNANCE
+  SPECTRAFLUX STATUS & GOVERNANCE
 ─────────────────────────────────────────────────────────────
   Killswitch (External Deploy): true
   Killswitch (Dev Upload):      true
@@ -202,7 +202,7 @@ fluxcell lockdown [OPTIONS]
 | Variable | Description | Default |
 | :--- | :--- | :--- |
 | `SPECTRA_GATEWAY_URL` | SpectraGQL gateway GraphQL endpoint | `http://127.0.0.1:8000` |
-| `SPECTRA_FLUX_URL` | Spectral Flux downstream runtime chassis | `http://127.0.0.1:8081` |
+| `SPECTRA_FLUX_URL` | SpectraFlux downstream runtime chassis | `http://127.0.0.1:8081` |
 | `SPECTRA_DEPLOY_TOKEN` | Bearer token for deployment authorization | *(None - required)* |
 
 ---
@@ -211,7 +211,7 @@ fluxcell lockdown [OPTIONS]
 
 ### Rapid Local Development (`--dev-upload`)
 
-During local feature development, you can upload raw compiled `.wasm` binaries directly to the local Spectral Flux chassis without publishing to external HTTPS artifact stores:
+During local feature development, you can upload raw compiled `.wasm` binaries directly to the local SpectraFlux chassis without publishing to external HTTPS artifact stores:
 
 ```bash
 # 1. Build and upload directly with auto-activation

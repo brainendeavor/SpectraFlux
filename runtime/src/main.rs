@@ -18,10 +18,10 @@ use tokio::net::TcpListener;
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
-    log::info!("🚀 Initializing Spectral Flux Engine...");
+    log::info!("🚀 Initializing SpectraFlux Engine...");
 
     // 1. Load Configuration
-    let config_path = std::env::var("FLUX_CONFIG").unwrap_or_else(|_| "spectral-flux.toml".to_string());
+    let config_path = std::env::var("FLUX_CONFIG").unwrap_or_else(|_| "spectra-flux.toml".to_string());
     let (config, resolved_config_path) = match FluxConfig::load_from_file_with_source(&config_path) {
         Ok(res) => {
             log::info!("Loaded configuration from '{}'", res.1);
@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
 
     let config_summary = Arc::new(config.to_sanitized_json(&resolved_config_path));
 
-    let worker_id = format!("spectral-flux-{}", uuid::Uuid::now_v7());
+    let worker_id = format!("spectra-flux-{}", uuid::Uuid::now_v7());
     log::info!("Instance Worker ID: {}", worker_id);
 
     // 2. Initialize Telemetry Client
@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
         200,
     ));
 
-    telemetry.record_log("INFO", "Spectral Flux engine initializing", None);
+    telemetry.record_log("INFO", "SpectraFlux engine initializing", None);
 
     // Start heartbeat reporter if gateway admin URL configured
     let stop_signal = Arc::new(AtomicBool::new(false));
@@ -274,8 +274,8 @@ async fn main() -> Result<()> {
     // 8. Start HTTP Server (:8081)
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let listener = TcpListener::bind(addr).await?;
-    log::info!("🚀 Spectral Flux HTTP Support Server listening on http://{}", addr);
-    telemetry.record_log("INFO", &format!("🚀 Spectral Flux HTTP server listening on http://{}", addr), None);
+    log::info!("🚀 SpectraFlux HTTP Support Server listening on http://{}", addr);
+    telemetry.record_log("INFO", &format!("🚀 SpectraFlux HTTP server listening on http://{}", addr), None);
 
     let router_arc = shared_router.clone();
     let telemetry_arc = telemetry.clone();
@@ -326,11 +326,11 @@ async fn main() -> Result<()> {
             }
         } => {}
         _ = tokio::signal::ctrl_c() => {
-            log::info!("Shutting down Spectral Flux Engine gracefully...");
+            log::info!("Shutting down SpectraFlux Engine gracefully...");
             stop_signal.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
-    log::info!("Spectral Flux Engine shutdown complete.");
+    log::info!("SpectraFlux Engine shutdown complete.");
     Ok(())
 }

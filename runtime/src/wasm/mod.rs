@@ -204,7 +204,7 @@ impl WasmHost {
         let tick_interval = Duration::from_millis(epoch_tick_interval_ms.max(1));
 
         std::thread::Builder::new()
-            .name("spectral-flux-epoch-ticker".to_string())
+            .name("spectra-flux-epoch-ticker".to_string())
             .spawn(move || {
                 while running_clone.load(Ordering::Relaxed) {
                     std::thread::sleep(tick_interval);

@@ -213,7 +213,7 @@ mod tests {
             topic: "mutation.coeval.createInterview".to_string(),
             operation_name: "createInterview".to_string(),
             ingress: "QUEUE".to_string(),
-            worker_id: "spectral-flux-worker-1".to_string(),
+            worker_id: "spectra-flux-worker-1".to_string(),
             status: "completed".to_string(),
             total_duration_ms: 12.45,
             started_at: "2026-09-16T12:00:00Z".to_string(),
