@@ -22,6 +22,15 @@ pub fn html_response(status: StatusCode, body: &'static str) -> Response<Full<by
         .unwrap_or_else(|_| Response::new(Full::new(bytes::Bytes::new())))
 }
 
+pub fn svg_response(status: StatusCode, body: &'static str) -> Response<Full<bytes::Bytes>> {
+    Response::builder()
+        .status(status)
+        .header("Content-Type", "image/svg+xml")
+        .header("Cache-Control", "public, max-age=86400, immutable")
+        .body(Full::new(bytes::Bytes::from_static(body.as_bytes())))
+        .unwrap_or_else(|_| Response::new(Full::new(bytes::Bytes::new())))
+}
+
 pub fn error_response(status: StatusCode, err_code: &str, message: &str) -> Response<Full<bytes::Bytes>> {
     let payload = serde_json::json!({
         "error": err_code,

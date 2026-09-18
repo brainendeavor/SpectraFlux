@@ -7,6 +7,7 @@ use std::sync::Arc;
 pub mod handlers;
 
 pub const ADMIN_HTML: &str = include_str!("assets/admin.html");
+pub const FAVICON_SVG: &str = include_str!("assets/favicon.svg");
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RouteDefinition {
@@ -414,6 +415,15 @@ where
         return Ok(handlers::probes::handle_metrics(&telemetry));
     }
 
+    // Favicon & Admin Assets
+    if path == "/favicon.ico"
+        || path == "/favicon.svg"
+        || path == "/admin/favicon.ico"
+        || path == "/admin/favicon.svg"
+    {
+        return Ok(handlers::admin::handle_favicon());
+    }
+
     // 2. Admin & Observability
     if path == "/admin/logs" || path == "/admin/api/v1/logs" {
         return Ok(handlers::admin::handle_logs(&telemetry));
@@ -707,6 +717,19 @@ mod tests {
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let chk: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(chk["commandId"], "018f3a2b-1234");
+
+        // 11. Favicon endpoints (/favicon.ico, /favicon.svg, /admin/favicon.ico, /admin/favicon.svg)
+        for fav_uri in ["/favicon.ico", "/favicon.svg", "/admin/favicon.ico", "/admin/favicon.svg"] {
+            let req = Request::builder().uri(fav_uri).body(Full::new(bytes::Bytes::new())).unwrap();
+            let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            assert_eq!(resp.headers().get("Content-Type").unwrap(), "image/svg+xml");
+            assert_eq!(resp.headers().get("Cache-Control").unwrap(), "public, max-age=86400, immutable");
+            let body = resp.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(body.as_ref(), FAVICON_SVG.as_bytes());
+        }
+        // Ensure no error count incremented
+        assert_eq!(telemetry.error_count.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

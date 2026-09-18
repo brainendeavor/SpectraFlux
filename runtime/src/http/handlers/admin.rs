@@ -1,5 +1,5 @@
-use super::{html_response, json_response};
-use crate::http::{FluxRouter, ADMIN_HTML};
+use super::{html_response, json_response, svg_response};
+use crate::http::{FluxRouter, ADMIN_HTML, FAVICON_SVG};
 use crate::telemetry::{DomainTraceStorage, TelemetryClient};
 use http_body_util::Full;
 use hyper::{Response, StatusCode};
@@ -8,6 +8,10 @@ use std::sync::{Arc, RwLock};
 
 pub fn handle_dashboard() -> Response<Full<bytes::Bytes>> {
     html_response(StatusCode::OK, ADMIN_HTML)
+}
+
+pub fn handle_favicon() -> Response<Full<bytes::Bytes>> {
+    svg_response(StatusCode::OK, FAVICON_SVG)
 }
 
 pub fn handle_logs(telemetry: &TelemetryClient) -> Response<Full<bytes::Bytes>> {
