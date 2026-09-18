@@ -129,10 +129,23 @@ impl FluxConfig {
     }
 
     pub fn load_from_file_with_source(path: &str) -> Result<(Self, String)> {
-        let apply_deployer_env = |cfg: &mut Self| {
+        let apply_env_overrides = |cfg: &mut Self| {
             if let Ok(v) = std::env::var("FLUX_DEPLOYER_ENABLED") {
                 if let Ok(b) = v.parse::<bool>() {
                     cfg.deployer.enabled = b;
+                }
+            }
+            // Standard 12-factor DATABASE_URL fallback (e.g. Railway, Supabase, Neon, Render)
+            // If FLUX__DATABASE__URL was not explicitly set, honor standard DATABASE_URL or FLUX_DATABASE_URL.
+            if std::env::var("FLUX__DATABASE__URL").is_err() {
+                if let Ok(db_url) = std::env::var("DATABASE_URL") {
+                    if !db_url.trim().is_empty() {
+                        cfg.database.url = Some(db_url);
+                    }
+                } else if let Ok(db_url) = std::env::var("FLUX_DATABASE_URL") {
+                    if !db_url.trim().is_empty() {
+                        cfg.database.url = Some(db_url);
+                    }
                 }
             }
         };
@@ -143,7 +156,7 @@ impl FluxConfig {
                 .add_source(config::Environment::with_prefix("FLUX").separator("__"))
                 .build()?;
             let mut cfg: Self = settings.try_deserialize()?;
-            apply_deployer_env(&mut cfg);
+            apply_env_overrides(&mut cfg);
             for (k, v) in default_profiles() {
                 cfg.profiles.entry(k).or_insert(v);
             }
@@ -158,7 +171,7 @@ impl FluxConfig {
             let env_cfg: Result<Self, _> = settings.try_deserialize();
             match env_cfg {
                 Ok(mut cfg) => {
-                    apply_deployer_env(&mut cfg);
+                    apply_env_overrides(&mut cfg);
                     for (k, v) in default_profiles() {
                         cfg.profiles.entry(k).or_insert(v);
                     }
@@ -169,7 +182,7 @@ impl FluxConfig {
                 }
                 Err(_) => {
                     let mut cfg = Self::default_local();
-                    apply_deployer_env(&mut cfg);
+                    apply_env_overrides(&mut cfg);
                     Ok((cfg, "built-in default (in-memory)".to_string()))
                 }
             }
@@ -475,7 +488,10 @@ fn default_db_max_connections() -> usize {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            url: std::env::var("DATABASE_URL").ok(),
+            url: std::env::var("FLUX__DATABASE__URL")
+                .or_else(|_| std::env::var("DATABASE_URL"))
+                .or_else(|_| std::env::var("FLUX_DATABASE_URL"))
+                .ok(),
             max_connections: default_db_max_connections(),
         }
     }

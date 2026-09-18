@@ -1773,8 +1773,8 @@
         }
 
         // Handle Deployer Subsystem Status
-        if (deployerRes.ok) {
-          const depData = await deployerRes.json();
+        if (deployerData) {
+          const depData = deployerData;
           const extBadge = document.getElementById('badge-external-deploy');
           if (extBadge) {
             extBadge.className = `badge ${depData.external_deploy_enabled ? 'badge-completed' : 'badge-error'}`;
@@ -2084,7 +2084,9 @@
       });
 
       if (filtered.length === 0) {
-        container.innerHTML = '<div style="padding: 1rem; color: var(--text-muted);">No matching logs found</div>';
+        container.innerHTML = allLogs.length === 0
+          ? '<div style="padding: 1rem; color: var(--text-muted);">No logs recorded yet</div>'
+          : '<div style="padding: 1rem; color: var(--text-muted);">No matching logs found</div>';
         return;
       }
 
