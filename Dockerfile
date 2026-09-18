@@ -40,8 +40,8 @@ WORKDIR /etc/spectraflux
 COPY runtime/spectra-flux.toml /etc/spectraflux/spectra-flux.toml
 RUN ln -s /etc/spectraflux/spectra-flux.toml /etc/spectraflux/spectral-flux.toml
 
-# Directory where .wasm fluxcells are mounted or bundled
-COPY fluxcells /etc/spectraflux/fluxcells
+# Directory where .wasm fluxcells are mounted or dynamically staged
+RUN mkdir -p /etc/spectraflux/fluxcells
 
 EXPOSE 8081
 
