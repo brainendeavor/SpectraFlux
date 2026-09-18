@@ -23,3 +23,5 @@ dist/
 build/
 fluxcells/fluxcells.json
 fluxcells/*.wasm
+!fluxcells/coeval_vote.wasm
+!fluxcells/coeval_vote.wasm.sha256

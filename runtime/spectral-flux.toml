@@ -28,9 +28,18 @@ max_connections = 16
 [fluxcells.magic_link]
 wasm_module = "fluxcells/magic_link.wasm"
 mount_path = "/auth"
-enabled = true
+profile = "standard"
+enabled = false
 
 [fluxcells.webhook]
 wasm_module = "fluxcells/webhook.wasm"
 mount_path = "/api/webhooks"
+profile = "standard"
+enabled = false
+
+[fluxcells.coeval_vote]
+wasm_module = "fluxcells/coeval_vote.wasm"
+mount_path = "/votes"
+profile = "standard"
 enabled = true
+subscriptions = ["mutation.coeval.recordvote", "mutation.recordvote"]

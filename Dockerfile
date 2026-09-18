@@ -3,11 +3,12 @@
 # SpectraFlux Runtime Dockerfile (High-Velocity Execution Chassis)
 # ------------------------------------------------------------------------------
 
-FROM rust:1.85-slim-bookworm AS builder
-
+FROM rust:1-slim-bookworm AS builder
 WORKDIR /usr/src/spectraflux
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
     pkg-config \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -38,7 +39,7 @@ WORKDIR /etc/spectraflux
 COPY runtime/spectral-flux.toml /etc/spectraflux/spectral-flux.toml
 
 # Directory where .wasm fluxcells are mounted or bundled
-RUN mkdir -p /etc/spectraflux/fluxcells
+COPY fluxcells /etc/spectraflux/fluxcells
 
 EXPOSE 8081
 
