@@ -73,9 +73,15 @@ impl PostgresDb {
         };
 
         let host = pg_config.get_hosts().first().cloned();
-        let is_local = match host {
+        let is_private_or_local = match host {
             Some(tokio_postgres::config::Host::Tcp(ref h)) => {
-                h == "localhost" || h == "127.0.0.1" || h == "0.0.0.0"
+                h == "localhost"
+                    || h == "127.0.0.1"
+                    || h == "0.0.0.0"
+                    || h.ends_with(".internal")
+                    || h.ends_with(".local")
+                    || h.ends_with(".cluster.local")
+                    || !h.contains('.')
             }
             _ => false,
         };
@@ -83,7 +89,7 @@ impl PostgresDb {
         let requires_tls = match pg_config.get_ssl_mode() {
             tokio_postgres::config::SslMode::Require => true,
             tokio_postgres::config::SslMode::Disable => false,
-            _ => !is_local, // Remote databases default to TLS
+            _ => !is_private_or_local, // Only public remote databases default to TLS
         };
 
         let pool = if requires_tls {
@@ -116,11 +122,12 @@ impl PostgresDb {
 #[async_trait::async_trait]
 impl FluxDb for PostgresDb {
     async fn begin_tx(&self) -> Result<Box<dyn FluxTx>> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .context("Failed to acquire PostgreSQL connection from pool")?;
+        let client = match self.pool.get().await {
+            Ok(c) => c,
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to acquire PostgreSQL connection from pool: {:#}", e));
+            }
+        };
         client
             .execute("BEGIN", &[])
             .await

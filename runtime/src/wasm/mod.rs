@@ -1039,7 +1039,7 @@ impl WasmHost {
 
                     let resp = match res {
                         Ok(tx_id) => serde_json::json!({ "ok": tx_id }),
-                        Err(e) => serde_json::json!({ "err": e.to_string() }),
+                        Err(e) => serde_json::json!({ "err": format!("{:#}", e) }),
                     };
                     write_string_to_caller(&mut caller, &resp.to_string()).unwrap_or(0)
                 },
@@ -1097,7 +1097,7 @@ impl WasmHost {
 
                     let resp = match res {
                         Ok(rows) => serde_json::json!({ "ok": rows }),
-                        Err(e) => serde_json::json!({ "err": e.to_string() }),
+                        Err(e) => serde_json::json!({ "err": format!("{:#}", e) }),
                     };
                     write_string_to_caller(&mut caller, &resp.to_string()).unwrap_or(0)
                 },
@@ -1157,7 +1157,7 @@ impl WasmHost {
 
                     let resp = match res {
                         Ok((_, rows_str)) => serde_json::json!({ "ok": rows_str }),
-                        Err(e) => serde_json::json!({ "err": e.to_string() }),
+                        Err(e) => serde_json::json!({ "err": format!("{:#}", e) }),
                     };
                     write_string_to_caller(&mut caller, &resp.to_string()).unwrap_or(0)
                 },
@@ -1189,8 +1189,8 @@ impl WasmHost {
                     });
 
                     let resp = match res {
-                        Ok(_) => serde_json::json!({ "ok": null }),
-                        Err(e) => serde_json::json!({ "err": e.to_string() }),
+                        Ok(_) => serde_json::json!({ "ok": true }),
+                        Err(e) => serde_json::json!({ "err": format!("{:#}", e) }),
                     };
                     write_string_to_caller(&mut caller, &resp.to_string()).unwrap_or(0)
                 },
@@ -1222,8 +1222,8 @@ impl WasmHost {
                     });
 
                     let resp = match res {
-                        Ok(_) => serde_json::json!({ "ok": null }),
-                        Err(e) => serde_json::json!({ "err": e.to_string() }),
+                        Ok(_) => serde_json::json!({ "ok": true }),
+                        Err(e) => serde_json::json!({ "err": format!("{:#}", e) }),
                     };
                     write_string_to_caller(&mut caller, &resp.to_string()).unwrap_or(0)
                 },

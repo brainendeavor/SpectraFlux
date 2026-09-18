@@ -20,22 +20,42 @@ mod host_db {
 }
 
 #[allow(dead_code)]
-#[derive(serde::Deserialize)]
-struct HostResp<T> {
-    ok: Option<T>,
-    err: Option<String>,
+fn parse_host_json_resp<T: DeserializeOwned>(s: &str) -> Result<T, String> {
+    let val: serde_json::Value = serde_json::from_str(s)
+        .map_err(|e| format!("Failed to parse host response '{}': {}", s, e))?;
+    if let Some(err) = val.get("err").and_then(|e| e.as_str()) {
+        return Err(err.to_string());
+    }
+    if let Some(ok_val) = val.get("ok") {
+        return serde_json::from_value(ok_val.clone())
+            .map_err(|e| format!("Failed to deserialize host response value from '{}': {}", s, e));
+    }
+    Err("Unknown host database error".to_string())
+}
+
+#[allow(dead_code)]
+fn parse_host_json_void_resp(s: &str) -> Result<(), String> {
+    let val: serde_json::Value = serde_json::from_str(s)
+        .map_err(|e| format!("Failed to parse host response '{}': {}", s, e))?;
+    if let Some(err) = val.get("err").and_then(|e| e.as_str()) {
+        return Err(err.to_string());
+    }
+    if val.get("ok").is_some() {
+        return Ok(());
+    }
+    Err("Unknown host database error".to_string())
 }
 
 #[cfg(target_arch = "wasm32")]
 fn parse_host_resp<T: DeserializeOwned>(packed: u64) -> Result<T, String> {
     let s = crate::abi::read_guest_string(packed);
-    let resp: HostResp<T> = serde_json::from_str(&s)
-        .map_err(|e| format!("Failed to parse host response '{}': {}", s, e))?;
-    if let Some(val) = resp.ok {
-        Ok(val)
-    } else {
-        Err(resp.err.unwrap_or_else(|| "Unknown host database error".to_string()))
-    }
+    parse_host_json_resp(&s)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn parse_host_void_resp(packed: u64) -> Result<(), String> {
+    let s = crate::abi::read_guest_string(packed);
+    parse_host_json_void_resp(&s)
 }
 
 /// Entry point to connect to a named host database pool.
@@ -161,7 +181,7 @@ impl Transaction {
         #[cfg(target_arch = "wasm32")]
         {
             let packed = unsafe { host_db::commit_tx(self.id) };
-            let _: Option<Value> = parse_host_resp(packed)?;
+            parse_host_void_resp(packed)?;
             Ok(())
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -176,7 +196,7 @@ impl Transaction {
         #[cfg(target_arch = "wasm32")]
         {
             let packed = unsafe { host_db::rollback_tx(self.id) };
-            let _: Option<Value> = parse_host_resp(packed)?;
+            parse_host_void_resp(packed)?;
             Ok(())
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -216,5 +236,40 @@ mod tests {
         let tx = db.begin_tx().unwrap();
         // Drop without commit should safely trigger rollback
         drop(tx);
+    }
+
+    #[test]
+    fn test_parse_host_json_void_resp() {
+        // null void response (e.g. from commit_tx before runtime update)
+        assert!(parse_host_json_void_resp(r#"{"ok":null}"#).is_ok());
+
+        // boolean true void response (from updated runtime)
+        assert!(parse_host_json_void_resp(r#"{"ok":true}"#).is_ok());
+
+        // error response
+        let err = parse_host_json_void_resp(r#"{"err":"Postgres error: aborted"}"#).unwrap_err();
+        assert_eq!(err, "Postgres error: aborted");
+
+        // malformed payload
+        assert!(parse_host_json_void_resp(r#"{"unknown":123}"#).is_err());
+    }
+
+    #[test]
+    fn test_parse_host_json_resp() {
+        // u64 value (e.g. tx_id or affected rows)
+        let val: u64 = parse_host_json_resp(r#"{"ok":42}"#).unwrap();
+        assert_eq!(val, 42);
+
+        // String value (e.g. query result)
+        let s: String = parse_host_json_resp(r#"{"ok":"[{\"count\":1}]"}"#).unwrap();
+        assert_eq!(s, r#"[{"count":1}]"#);
+
+        // Option<Value> with null
+        let opt: Option<Value> = parse_host_json_resp(r#"{"ok":null}"#).unwrap();
+        assert_eq!(opt, None);
+
+        // Error
+        let err = parse_host_json_resp::<u64>(r#"{"err":"Table not found"}"#).unwrap_err();
+        assert_eq!(err, "Table not found");
     }
 }
