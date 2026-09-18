@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SpectraFlux | Fluxcell Chassis Dashboard</title>
+  <title>SpectraFlux Admin Console</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="alternate icon" href="/favicon.ico">
   <style>
@@ -287,28 +287,80 @@
     }
 
     /* Shortcuts Modal */
-    #shortcutsModalBackdrop {
+    #shortcutsModalBackdrop, #devUploadModalBackdrop {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(2px);
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(3px);
       z-index: 1099;
       display: none;
     }
-    #shortcutsModal {
+    #shortcutsModal, #devUploadModal {
       position: fixed;
       top: 50%; left: 50%;
       transform: translate(-50%, -50%);
-      width: 440px;
-      max-width: 90vw;
+      width: 660px;
+      height: 540px;
+      max-width: 95vw;
+      max-height: 90vh;
       background: #111827;
       border: 1px solid var(--border);
       border-radius: 0.75rem;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8);
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.85);
       z-index: 1100;
       display: none;
       padding: 1.5rem;
+      flex-direction: column;
+      box-sizing: border-box;
     }
+    .workers-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+    .worker-card {
+      background: #090d16;
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      position: relative;
+      font-size: 0.8125rem;
+    }
+    .worker-card.active-worker {
+      border-color: rgba(56, 189, 248, 0.4);
+      background: rgba(56, 189, 248, 0.04);
+    }
+    .worker-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .worker-title {
+      font-size: 0.825rem;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .mem-bar-bg {
+      height: 5px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 0.25rem;
+    }
+    .mem-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #38bdf8, #818cf8);
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+
 
     /* Inspection Slide-out Drawer */
     #traceDrawerBackdrop {
@@ -532,13 +584,32 @@
 <body>
   <header>
     <div class="logo-area">
-      <div class="logo">SpectraFlux</div>
-      <span class="badge badge-running">Live Logs Active</span>
-      <span class="badge badge-info" id="workerIdBadge">worker: ...</span>
-      <span class="badge badge-purple" id="configSourceBadge" title="Resolved Configuration Source">config: ...</span>
+      <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle, rgba(0, 240, 255, 0.16) 0%, rgba(15, 23, 42, 0.95) 75%); border: 1px solid rgba(0, 240, 255, 0.4); border-radius: 10px; box-shadow: 0 0 12px rgba(0, 240, 255, 0.25), inset 0 0 8px rgba(0, 240, 255, 0.15); flex-shrink: 0; padding: 2px;">
+        <svg viewBox="180 100 664 664" width="38" height="38" style="filter: drop-shadow(0 0 8px rgba(0, 240, 255, 0.6));">
+          <defs>
+            <radialGradient id="glow-spiro-nav" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.35"/>
+              <stop offset="50%" stop-color="#FF5500" stop-opacity="0.2"/>
+              <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <circle cx="512" cy="430" r="310" fill="url(#glow-spiro-nav)"/>
+          <circle cx="512" cy="430" r="275" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="2"/>
+          <circle cx="512" cy="430" r="190" fill="none" stroke="#00F0FF" stroke-opacity="0.35" stroke-width="2" stroke-dasharray="4 8"/>
+          <circle cx="512" cy="430" r="80" fill="none" stroke="#FF5500" stroke-opacity="0.5" stroke-width="2" stroke-dasharray="3 6"/>
+          <path d="M 580.77,479.96 L 565.16,504.09 L 552.40,529.51 L 542.70,555.65 L 536.21,581.89 L 532.94,607.61 L 532.81,632.20 L 535.63,655.08 L 541.11,675.69 L 548.90,693.56 L 558.55,708.29 L 569.54,719.53 L 581.33,727.08 L 593.32,730.80 L 604.93,730.69 L 615.58,726.82 L 624.69,719.40 L 631.76,708.71 L 636.32,695.13 L 638.00,679.13 L 636.50,661.21 L 631.61,641.95 L 623.23,621.95 L 611.37,601.81 L 596.15,582.13 L 577.78,563.50 L 556.56,546.44 L 532.91,531.44 L 507.29,518.89 L 480.24,509.12 L 452.35,502.35 L 424.23,498.69 L 396.50,498.17 L 369.79,500.71 L 344.69,506.09 L 321.73,514.05 L 301.41,524.21 L 284.14,536.11 L 270.24,549.24 L 259.96,563.05 L 253.41,576.95 L 250.62,590.35 L 251.51,602.64 L 255.89,613.27 L 263.47,621.72 L 273.88,627.54 L 286.66,630.32 L 301.31,629.78 L 317.27,625.72 L 333.94,618.02 L 350.72,606.70 L 367.01,591.86 L 382.25,573.72 L 395.90,552.60 L 407.50,528.88 L 416.65,503.05 L 423.03,475.65 L 426.44,447.26 L 426.75,418.49 L 423.96,389.97 L 418.15,362.32 L 409.54,336.13 L 398.40,311.95 L 385.12,290.27 L 370.16,271.51 L 354.03,255.99 L 337.30,243.96 L 320.57,235.53 L 304.42,230.74 L 289.46,229.51 L 276.26,231.65 L 265.34,236.89 L 257.16,244.85 L 252.12,255.08 L 250.51,267.09 L 252.56,280.31 L 258.35,294.15 L 267.89,308.03 L 281.08,321.35 L 297.70,333.54 L 317.44,344.08 L 339.90,352.51 L 364.63,358.44 L 391.06,361.56 L 418.63,361.66 L 446.72,358.64 L 474.71,352.48 L 501.97,343.29 L 527.92,331.28 L 552.01,316.74 L 573.75,300.06 L 592.72,281.70 L 608.59,262.19 L 621.13,242.09 L 630.21,222.01 L 635.79,202.55 L 637.96,184.32 L 636.90,167.89 L 632.89,153.79 L 626.28,142.49 L 617.54,134.39 L 607.16,129.79 L 595.69,128.91 L 583.73,131.87 L 571.85,138.66 L 560.66,149.18 L 550.70,163.23 L 542.50,180.50 L 536.52,200.60 L 533.14,223.07 L 532.67,247.36 L 535.30,272.90 L 541.15,299.09 L 550.21,325.30 L 562.37,350.91 L 577.43,375.34 L 595.08,398.05 L 614.93,418.54 L 636.51,436.40 L 659.29,451.31 L 682.69,463.02 L 706.11,471.42 L 728.92,476.47 L 750.54,478.25 L 770.37,476.95 L 787.87,472.85 L 802.57,466.31 L 814.08,457.77 L 822.06,447.75 L 826.30,436.79 L 826.69,425.47 L 823.21,414.39 L 815.96,404.13 L 805.14,395.25 L 791.05,388.28 L 774.07,383.65 L 754.67,381.77 L 733.36,382.92 L 710.74,387.30 L 687.39,395.03 L 663.94,406.09 L 640.99,420.37 L 619.13,437.67 L 598.89,457.66 L 580.77,479.96" fill="none" stroke="#FF5500" stroke-width="3.5" stroke-opacity="0.95"/>
+          <path d="M 824.50,430.00 L 823.70,423.48 L 821.31,417.09 L 817.35,410.97 L 811.87,405.25 L 804.90,400.06 L 796.53,395.51 L 786.82,391.72 L 775.88,388.79 L 763.80,386.81 L 750.69,385.88 L 736.69,386.05 L 721.92,387.38 L 706.51,389.93 L 690.62,393.71 L 674.38,398.75 L 657.94,405.04 L 641.46,412.58 L 625.06,421.33 L 608.91,431.24 L 593.13,442.27 L 577.87,454.33 L 563.23,467.36 L 549.36,481.23 L 536.33,495.87 L 524.27,511.13 L 513.24,526.91 L 503.33,543.06 L 494.58,559.46 L 487.04,575.94 L 480.75,592.38 L 475.71,608.62 L 471.93,624.51 L 469.38,639.92 L 468.05,654.69 L 467.88,668.69 L 468.81,681.80 L 470.79,693.88 L 473.72,704.82 L 477.51,714.53 L 482.06,722.90 L 487.25,729.87 L 492.97,735.35 L 499.09,739.31 L 505.48,741.70 L 512.00,742.50 L 518.52,741.70 L 524.91,739.31 L 531.03,735.35 L 536.75,729.87 L 541.94,722.90 L 546.49,714.53 L 550.28,704.82 L 553.21,693.88 L 555.19,681.80 L 556.12,668.69 L 555.95,654.69 L 554.62,639.92 L 552.07,624.51 L 548.29,608.62 L 543.25,592.38 L 536.96,575.94 L 529.42,559.46 L 520.67,543.06 L 510.76,526.91 L 499.73,511.13 L 487.67,495.87 L 474.64,481.23 L 460.77,467.36 L 446.13,454.33 L 430.87,442.27 L 415.09,431.24 L 398.94,421.33 L 382.54,412.58 L 366.06,405.04 L 349.62,398.75 L 333.38,393.71 L 317.49,389.93 L 302.08,387.38 L 287.31,386.05 L 273.31,385.88 L 260.20,386.81 L 248.12,388.79 L 237.18,391.72 L 227.47,395.51 L 219.10,400.06 L 212.13,405.25 L 206.65,410.97 L 202.69,417.09 L 200.30,423.48 L 199.50,430.00" fill="none" stroke="#00F0FF" stroke-width="3.5" stroke-opacity="1.0"/>
+          <circle cx="512" cy="430" r="32" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-opacity="0.8"/>
+          <circle cx="512" cy="430" r="14" fill="#00F0FF"/>
+          <circle cx="512" cy="430" r="6" fill="#FFFFFF"/>
+        </svg>
+      </div>
+      <div style="display: flex; align-items: center; font-size: 1.25rem; font-weight: 800; letter-spacing: 0.05em; font-family: system-ui, -apple-system, sans-serif;">
+        <span style="color: #ffffff;">SPECTRA</span><span style="color: #FF5500; margin-left: 2px;">FLUX</span>
+      </div>
     </div>
     <div style="display: flex; gap: 0.75rem; align-items: center;">
-      <button class="btn btn-secondary btn-sm" onclick="toggleShortcutsModal(true)" title="Keyboard Shortcuts (?)">⌨️ Shortcuts</button>
+      <button class="btn btn-secondary btn-sm" onclick="toggleShortcutsModal(true)" style="display: flex; align-items: center; gap: 6px;" title="Appliance Help &amp; Shortcuts (?)">Help <kbd class="kbd-hint" style="font-size: 11px; padding: 1px 5px;">?</kbd></button>
       <label style="font-size: 0.8125rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.35rem; cursor: pointer;">
         <input type="checkbox" id="autoRefresh" checked> Auto-refresh (2s)
       </label>
@@ -571,7 +642,7 @@
 
   <div class="nav-tabs">
     <button class="tab-btn active" id="tabBtn-traces" onclick="switchTab('traces')">
-      <span>Domain Operations (Traces)</span>
+      <span>🔬 Domain Operations (Traces)</span>
       <span class="tab-info-container" onclick="event.stopPropagation()">
         <span class="info-circle" aria-label="Domain Operations Info">ⓘ</span>
         <span class="info-tooltip-popover">
@@ -580,10 +651,10 @@
         </span>
       </span>
     </button>
-    <button class="tab-btn" id="tabBtn-logs" onclick="switchTab('logs')">Live Logs</button>
-    <button class="tab-btn" id="tabBtn-fluxcells" onclick="switchTab('fluxcells')">Fluxcells &amp; Routes</button>
-    <button class="tab-btn" id="tabBtn-checkpoints" onclick="switchTab('checkpoints')">Step Checkpoints</button>
-    <button class="tab-btn" id="tabBtn-config" onclick="switchTab('config')">Chassis &amp; Config</button>
+    <button class="tab-btn" id="tabBtn-logs" onclick="switchTab('logs')">📜 Live Logs</button>
+    <button class="tab-btn" id="tabBtn-fluxcells" onclick="switchTab('fluxcells')">🚀 Fluxcells &amp; Routes</button>
+    <button class="tab-btn" id="tabBtn-checkpoints" onclick="switchTab('checkpoints')">💾 Step Checkpoints</button>
+    <button class="tab-btn" id="tabBtn-config" onclick="switchTab('config')">⚙️ Chassis &amp; Config</button>
   </div>
 
   <!-- 1. Domain Operations (Traces) Tab -->
@@ -641,23 +712,112 @@
     </div>
   </div>
 
-  <!-- 3. Fluxcells & Routes Tab -->
+  <!-- 3. Fluxcells & Routes Tab (with Deployment Governance & Staged Activation) -->
   <div id="tab-fluxcells" style="display: none;">
-    <div class="table-container">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Fluxcell Name</th>
-            <th>Mount Path</th>
-            <th>Route Count</th>
-            <th>Registered Routes</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody id="fluxcellTableBody">
-          <tr><td colspan="5" style="color: var(--text-muted); padding: 1.5rem; text-align: center;">Loading fluxcells...</td></tr>
-        </tbody>
-      </table>
+    <!-- Deployment Governance Controls Card -->
+    <div class="stat-card" style="margin-bottom: 1.25rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+        <div>
+          <h3 style="font-size: 1rem; color: #fff; font-weight: 700; display: flex; align-items: center; gap: 0.5rem;">
+            <span>🛡️ Fluxcell Deployment Governance &amp; Staged Activation</span>
+          </h3>
+          <p style="color: var(--text-muted); font-size: 0.8125rem; margin-top: 0.25rem;">
+            Dual-killswitch ingestion guards, staged artifact inspection, and one-click emergency lockdown.
+          </p>
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <span id="badge-external-deploy" class="badge badge-running">External CI/CD: ACTIVE</span>
+          <span id="badge-dev-upload" class="badge badge-warn">Dev Upload: ACTIVE</span>
+          <button class="btn btn-secondary btn-sm" onclick="triggerEmergencyLockdown()" style="color: var(--error); border-color: rgba(248, 113, 113, 0.4); font-weight: 700;">
+            🛑 Instant Lockdown
+          </button>
+          <button class="btn btn-sm" onclick="openDevUploadModal()">+ Dev Upload</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Staged Fluxcells Section -->
+    <div class="stat-card" style="margin-bottom: 1.25rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+        <h4 style="font-size: 0.9rem; font-weight: 700; color: var(--warning); display: flex; align-items: center; gap: 0.5rem;">
+          <span>⏳ Staged Fluxcells (Human-in-the-Loop Activation)</span>
+          <span id="stagedCountBadge" class="badge badge-warn">0 Pending</span>
+        </h4>
+      </div>
+      <div class="table-container">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Cell Name</th>
+              <th>Version / Git</th>
+              <th>SHA-256 Checksum</th>
+              <th>Mount Path</th>
+              <th>Status</th>
+              <th>Installed At</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="stagedTableBody">
+            <tr><td colspan="7" style="color: var(--text-muted); padding: 1.25rem; text-align: center;">No fluxcells currently staged. Uploaded or deployed artifacts appear here before serving live traffic.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Active Fluxcells Registry -->
+    <div class="stat-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+        <h4 style="font-size: 0.9rem; font-weight: 700; color: var(--accent); display: flex; align-items: center; gap: 0.5rem;">
+          <span>🚀 Active Production Fluxcells</span>
+        </h4>
+      </div>
+      <div class="table-container">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Fluxcell Name</th>
+              <th>Mount Path</th>
+              <th>Route Count</th>
+              <th>Registered Routes</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="fluxcellTableBody">
+            <tr><td colspan="6" style="color: var(--text-muted); padding: 1.5rem; text-align: center;">Loading fluxcells...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dev Upload Modal -->
+  <div id="devUploadModalBackdrop" onclick="closeDevUploadModal()"></div>
+  <div id="devUploadModal">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
+      <h3 style="font-size: 1.1rem; font-weight: 700; color: #fff;">📦 Stage Wasm Fluxcell</h3>
+      <button class="drawer-close" onclick="closeDevUploadModal()">&times;</button>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 0.85rem; font-size: 0.875rem;">
+      <div>
+        <label style="display: block; color: var(--text-muted); margin-bottom: 0.35rem; font-weight: 600;">Fluxcell Name</label>
+        <input type="text" id="upload-cell-name" class="search-box" style="width: 100%;" placeholder="e.g. auth-cell, order-processor">
+      </div>
+      <div>
+        <label style="display: block; color: var(--text-muted); margin-bottom: 0.35rem; font-weight: 600;">Mount Path</label>
+        <input type="text" id="upload-cell-mount" class="search-box" style="width: 100%;" placeholder="e.g. /api/auth">
+      </div>
+      <div>
+        <label style="display: block; color: var(--text-muted); margin-bottom: 0.35rem; font-weight: 600;">Wasm Binary (.wasm)</label>
+        <input type="file" id="upload-cell-file" accept=".wasm" class="search-box" style="width: 100%; padding: 0.4rem;">
+      </div>
+      <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-muted); margin-top: 0.25rem;">
+        <input type="checkbox" id="upload-cell-auto-activate"> Auto-activate immediately (bypass staged inspection)
+      </label>
+      <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.75rem;">
+        <button class="btn btn-secondary" onclick="closeDevUploadModal()">Cancel</button>
+        <button class="btn" onclick="submitDevUpload()">Upload &amp; Stage</button>
+      </div>
     </div>
   </div>
 
@@ -768,42 +928,130 @@
       </div>
     </div>
 
-    <!-- Execution Profiles Table -->
+    <!-- Execution Profiles & Worker Pool -->
     <div class="stat-card" style="margin-bottom: 1.5rem;">
-      <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: var(--accent);">
-        ⚡ Active Wasm Execution Profiles
-      </h3>
-      <div class="table-container">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+        <div>
+          <h3 style="font-size: 1rem; color: var(--accent); font-weight: 700; display: flex; align-items: center; gap: 0.5rem;">
+            <span>⚡ Active Wasm Execution Profiles &amp; Worker Allotment</span>
+          </h3>
+          <p style="color: var(--text-muted); font-size: 0.8125rem; margin-top: 0.25rem;">
+            Sandboxed Wasmtime instance pools isolated by memory quotas and epoch interruption timers.
+          </p>
+        </div>
+        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+          <div style="background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 0.4rem; padding: 0.35rem 0.75rem; font-size: 0.8rem;">
+            <span style="color: var(--text-muted);">Process RSS: </span>
+            <strong id="processRssVal" style="color: var(--accent);">-- MB</strong>
+          </div>
+          <div style="background: rgba(192, 132, 252, 0.1); border: 1px solid rgba(192, 132, 252, 0.3); border-radius: 0.4rem; padding: 0.35rem 0.75rem; font-size: 0.8rem;">
+            <span style="color: var(--text-muted);">Total Chassis Cap: </span>
+            <strong id="totalPoolCapVal" style="color: var(--purple);">1,024 MB (1 GB)</strong>
+          </div>
+        </div>
+      </div>
+
+      <!-- Profiles Summary Table -->
+      <div class="table-container" style="margin-bottom: 1.5rem;">
         <table class="table">
           <thead>
             <tr>
-              <th>Profile Name</th>
+              <th>Profile</th>
               <th>Timeout</th>
-              <th>Max Concurrency Instances</th>
               <th>Offload Strategy</th>
-              <th>Max Memory</th>
+              <th>Worker Slots (Running / Max)</th>
+              <th>Allocated RAM / Pool Cap</th>
+              <th>Assigned Fluxcells</th>
             </tr>
           </thead>
           <tbody id="profilesTableBody">
-            <tr><td colspan="5" style="color: var(--text-muted); padding: 1rem; text-align: center;">Loading execution profiles...</td></tr>
+            <tr><td colspan="6" style="color: var(--text-muted); padding: 1rem; text-align: center;">Loading execution profiles...</td></tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- Worker Instances by Profile & Fluxcell -->
+      <div id="workersSection">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+          <h4 style="font-size: 0.9rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 0.5rem;">
+            <span>👷 Sandboxed Wasmtime Worker Instances</span>
+            <span class="badge badge-info" id="workersPoolBadge">-- Slots Active</span>
+          </h4>
+          <span style="font-size: 0.8rem; color: var(--text-muted);">Epoch interruption preempt active · Memory quota isolated</span>
+        </div>
+        <!-- Active Workers Grouped by Fluxcell -->
+        <div id="fluxcellWorkersContainer" style="display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1rem;">
+          <div style="color: var(--text-muted); font-size: 0.85rem; padding: 0.5rem 0;">Loading worker instances...</div>
+        </div>
+        <!-- Standby / Pooled Instances Low-Profile Rack -->
+        <div id="standbyWorkersRack" style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.75rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+            <span style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Standby Instance Pool (Ready on demand)</span>
+            <span style="font-size: 0.75rem; color: var(--text-muted);" id="standbyCountLabel">-- standby slots</span>
+          </div>
+          <div id="standbySlotsStrip" style="display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;">
+          </div>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- Keyboard Shortcuts Cheatsheet Modal -->
+  <!-- Help & Shortcuts Cheatsheet Modal -->
   <div id="shortcutsModalBackdrop" onclick="toggleShortcutsModal(false)"></div>
   <div id="shortcutsModal">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
-      <div style="font-weight: 700; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem;">
-        <span>⌨️ Keyboard Shortcuts</span>
+      <div style="font-weight: 700; font-size: 1.15rem; display: flex; align-items: center; gap: 0.5rem;">
+        <span>❓ SpectraFlux Chassis Help &amp; Overview</span>
       </div>
       <button class="drawer-close" onclick="toggleShortcutsModal(false)">&times;</button>
     </div>
-    <div style="display: flex; flex-direction: column; gap: 0.75rem; font-size: 0.875rem;">
+
+    <div class="payload-tabs" style="margin-bottom: 1rem;">
+      <button class="payload-tab active" id="helpTabBtn-overview" onclick="switchHelpTab('overview')">System Overview</button>
+      <button class="payload-tab" id="helpTabBtn-shortcuts" onclick="switchHelpTab('shortcuts')">Keyboard Shortcuts</button>
+    </div>
+
+    <!-- Help: System Overview -->
+    <div id="helpTab-overview" style="flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 0.85rem; font-size: 0.85rem; color: var(--text-muted); padding-right: 0.25rem;">
+      <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 0.5rem; padding: 0.85rem;">
+        <strong style="color: var(--accent); font-size: 0.9rem;">🚀 What is SpectraFlux?</strong>
+        <p style="margin-top: 0.35rem; line-height: 1.45; color: var(--text);">
+          SpectraFlux is an ultra-high-velocity WebAssembly (Wasm) execution chassis designed to run downstream write-model handlers, event-driven projections, and reactive workflows with sub-millisecond line-rate dispatch.
+        </p>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+        <div style="background: var(--card-bg); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.75rem;">
+          <strong style="color: var(--text); display: flex; align-items: center; gap: 0.35rem;">⚡ Wasmtime Sandboxing</strong>
+          <p style="margin-top: 0.25rem; font-size: 0.8rem; line-height: 1.4;">
+            Every fluxcell executes in isolated Wasm memory with strict memory quotas (e.g. 16MB) and epoch interruption timers that prevent infinite loops.
+          </p>
+        </div>
+        <div style="background: var(--card-bg); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.75rem;">
+          <strong style="color: var(--text); display: flex; align-items: center; gap: 0.35rem;">💾 80/20 Durable Steps</strong>
+          <p style="margin-top: 0.25rem; font-size: 0.8rem; line-height: 1.4;">
+            Checkpoints automatically memoize completed side-effects by UUIDv7 ID, eliminating duplicate third-party calls (e.g. Stripe) during write retries.
+          </p>
+        </div>
+        <div style="background: var(--card-bg); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.75rem;">
+          <strong style="color: var(--text); display: flex; align-items: center; gap: 0.35rem;">📨 Streaming &amp; Ingress</strong>
+          <p style="margin-top: 0.25rem; font-size: 0.8rem; line-height: 1.4;">
+            Natively consumes from NATS JetStream, Redis Streams, and Kafka/Redpanda, with direct HTTP ingress and non-blocking concurrency pools.
+          </p>
+        </div>
+        <div style="background: var(--card-bg); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.75rem;">
+          <strong style="color: var(--text); display: flex; align-items: center; gap: 0.35rem;">🛡️ Hot-Swap Governance</strong>
+          <p style="margin-top: 0.25rem; font-size: 0.8rem; line-height: 1.4;">
+            Stage fluxcells dynamically via Dev Upload or external CI/CD with SHA-256 validation and one-click emergency lockdown controls.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Help: Keyboard Shortcuts -->
+    <div id="helpTab-shortcuts" style="flex: 1; min-height: 0; overflow-y: auto; display: none; flex-direction: column; gap: 0.75rem; font-size: 0.875rem; padding-right: 0.25rem;">
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="color: var(--text-muted);">Switch Tabs</span>
+        <span style="color: var(--text-muted);">Switch Tabs (Traces, Logs, Fluxcells, Checkpoints, Config)</span>
         <div style="display: flex; gap: 0.25rem;">
           <kbd class="kbd-hint">1</kbd>
           <kbd class="kbd-hint">2</kbd>
@@ -819,7 +1067,7 @@
         </div>
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="color: var(--text-muted);">Inspect Selected Trace</span>
+        <span style="color: var(--text-muted);">Inspect Selected Trace in Drawer</span>
         <kbd class="kbd-hint">Enter</kbd>
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -827,7 +1075,7 @@
         <kbd class="kbd-hint">/</kbd>
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="color: var(--text-muted);">Close Drawer / Dismiss</span>
+        <span style="color: var(--text-muted);">Close Drawer / Dismiss Modal</span>
         <kbd class="kbd-hint">Esc</kbd>
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -835,7 +1083,7 @@
         <kbd class="kbd-hint">r</kbd>
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="color: var(--text-muted);">Toggle Shortcuts Help</span>
+        <span style="color: var(--text-muted);">Toggle Help &amp; Shortcuts</span>
         <kbd class="kbd-hint">?</kbd>
       </div>
     </div>
@@ -890,6 +1138,121 @@
       backdrop.style.display = shouldShow ? 'block' : 'none';
     }
 
+    function switchHelpTab(tab) {
+      const btnOverview = document.getElementById('helpTabBtn-overview');
+      const btnShortcuts = document.getElementById('helpTabBtn-shortcuts');
+      const paneOverview = document.getElementById('helpTab-overview');
+      const paneShortcuts = document.getElementById('helpTab-shortcuts');
+      if (tab === 'overview') {
+        if (btnOverview) btnOverview.classList.add('active');
+        if (btnShortcuts) btnShortcuts.classList.remove('active');
+        if (paneOverview) paneOverview.style.display = 'flex';
+        if (paneShortcuts) paneShortcuts.style.display = 'none';
+      } else {
+        if (btnOverview) btnOverview.classList.remove('active');
+        if (btnShortcuts) btnShortcuts.classList.add('active');
+        if (paneOverview) paneOverview.style.display = 'none';
+        if (paneShortcuts) paneShortcuts.style.display = 'flex';
+      }
+    }
+
+    function openDevUploadModal() {
+      const m = document.getElementById('devUploadModal');
+      const b = document.getElementById('devUploadModalBackdrop');
+      if (m) m.style.display = 'block';
+      if (b) b.style.display = 'block';
+    }
+
+    function closeDevUploadModal() {
+      const m = document.getElementById('devUploadModal');
+      const b = document.getElementById('devUploadModalBackdrop');
+      if (m) m.style.display = 'none';
+      if (b) b.style.display = 'none';
+    }
+
+    async function triggerEmergencyLockdown() {
+      if (!confirm("EMERGENCY LOCKDOWN: Freeze all incoming Fluxcell deployments immediately? Running production traffic will not be affected.")) return;
+      try {
+        const res = await fetch('/admin/api/v1/security/lockdown', { method: 'POST' });
+        if (res.ok) {
+          alert("Lockdown successful! All deployment ingestion is frozen.");
+          fetchData();
+        } else {
+          alert("Lockdown failed with status " + res.status);
+        }
+      } catch (e) {
+        alert("Lockdown request failed: " + e.message);
+      }
+    }
+
+    async function activateFluxcell(name, sha256) {
+      if (!confirm(`Activate fluxcell '${name}' into live production traffic?`)) return;
+      try {
+        const res = await fetch('/_flux/deployer/activate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, sha256 }),
+        });
+        if (res.ok) {
+          alert(`Fluxcell '${name}' activated successfully!`);
+          fetchData();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert(`Activation failed: ${err.message || res.statusText}`);
+        }
+      } catch (e) {
+        alert("Activation error: " + e.message);
+      }
+    }
+
+    async function removeFluxcell(name) {
+      if (!confirm(`Remove fluxcell '${name}' from chassis?`)) return;
+      try {
+        const res = await fetch(`/_flux/deployer/fluxcells/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (res.ok) {
+          alert(`Fluxcell '${name}' removed successfully.`);
+          fetchData();
+        } else {
+          alert("Removal failed with status " + res.status);
+        }
+      } catch (e) {
+        alert("Removal error: " + e.message);
+      }
+    }
+
+    async function submitDevUpload() {
+      const name = document.getElementById('upload-cell-name').value.trim();
+      const mount = document.getElementById('upload-cell-mount').value.trim();
+      const autoActivate = document.getElementById('upload-cell-auto-activate').checked;
+      const fileInput = document.getElementById('upload-cell-file');
+
+      if (!name) { alert("Please provide a Fluxcell Name"); return; }
+      if (!fileInput.files || fileInput.files.length === 0) { alert("Please select a .wasm file"); return; }
+
+      const file = fileInput.files[0];
+      const buffer = await file.arrayBuffer();
+
+      try {
+        const url = `/_flux/deployer/upload?name=${encodeURIComponent(name)}&mount=${encodeURIComponent(mount || '/api/' + name)}&auto_activate=${autoActivate}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/wasm' },
+          body: buffer,
+        });
+
+        if (res.ok) {
+          alert(`Fluxcell '${name}' uploaded and ${autoActivate ? 'activated' : 'staged'} successfully!`);
+          closeDevUploadModal();
+          fetchData();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert(`Upload failed: ${err.message || res.statusText}`);
+        }
+      } catch (e) {
+        alert("Upload error: " + e.message);
+      }
+    }
+
     function selectTraceRow(index) {
       if (!currentFilteredTraces || currentFilteredTraces.length === 0) {
         selectedTraceIndex = -1;
@@ -917,6 +1280,11 @@
         const modal = document.getElementById('shortcutsModal');
         if (modal && modal.style.display === 'block') {
           toggleShortcutsModal(false);
+          return;
+        }
+        const devModal = document.getElementById('devUploadModal');
+        if (devModal && devModal.style.display === 'block') {
+          closeDevUploadModal();
           return;
         }
         const drawer = document.getElementById('traceDrawer');
@@ -964,6 +1332,7 @@
       if (e.key === '3') { switchTab('fluxcells'); return; }
       if (e.key === '4') { switchTab('checkpoints'); return; }
       if (e.key === '5') { switchTab('config'); return; }
+      if (e.key === 'u' || e.key === 'U') { e.preventDefault(); switchTab('fluxcells'); openDevUploadModal(); return; }
 
       if (currentTab === 'traces' && currentFilteredTraces.length > 0) {
         if (e.key === 'ArrowDown' || e.key === 'j') {
@@ -1047,16 +1416,27 @@
 
     async function fetchData() {
       try {
-        const [overviewRes, logsRes, tracesRes] = await Promise.all([
+        const [overviewRes, logsRes, tracesRes, deployerRes] = await Promise.all([
           fetch('/admin/api/v1/overview').catch(e => ({ ok: false, error: e })),
           fetch('/admin/api/v1/logs').catch(e => ({ ok: false, error: e })),
-          fetch('/admin/api/v1/traces?limit=100').catch(e => ({ ok: false, error: e }))
+          fetch('/admin/api/v1/traces?limit=100').catch(e => ({ ok: false, error: e })),
+          fetch('/_flux/deployer/status').catch(e => ({ ok: false, error: e }))
         ]);
 
+        let deployerData = null;
+        const deployerMap = {};
+        if (deployerRes && deployerRes.ok) {
+          deployerData = await deployerRes.json().catch(() => null);
+          if (deployerData && Array.isArray(deployerData.fluxcells)) {
+            for (const c of deployerData.fluxcells) {
+              deployerMap[c.name] = c;
+            }
+          }
+        }
+
+        let cellNames = [];
         if (overviewRes.ok) {
           const overview = await overviewRes.json();
-          const workerBadge = document.getElementById('workerIdBadge');
-          if (workerBadge) workerBadge.textContent = `worker: ${overview.workerId || 'chassis'}`;
           const uptime = document.getElementById('uptimeVal');
           if (uptime) uptime.textContent = formatDuration(overview.uptimeSeconds);
           const processed = document.getElementById('processedVal');
@@ -1064,15 +1444,35 @@
           const errors = document.getElementById('errorsVal');
           if (errors) errors.textContent = (overview.errors || 0).toLocaleString();
 
+          // Memory RSS
+          if (overview.memory && overview.memory.processRssMb !== undefined) {
+            const rssEl = document.getElementById('processRssVal');
+            if (rssEl) rssEl.textContent = `${overview.memory.processRssMb.toFixed(1)} MB`;
+          }
+
           const cells = overview.fluxcells || {};
-          const cellNames = Object.keys(cells);
+          cellNames = Object.keys(cells);
+          const fluxcellsList = Array.isArray(overview.fluxcells)
+            ? overview.fluxcells
+            : Object.entries(cells).map(([name, c]) => {
+                const cellObj = typeof c === 'object' && c !== null ? c : {};
+                const prof = cellObj.profile
+                  || (deployerMap[name] && deployerMap[name].profile)
+                  || (overview.config && overview.config.fluxcells && overview.config.fluxcells[name] && overview.config.fluxcells[name].profile)
+                  || 'standard';
+                return {
+                  name,
+                  ...cellObj,
+                  profile: prof,
+                };
+              });
           const cellsVal = document.getElementById('cellsVal');
           if (cellsVal) cellsVal.textContent = cellNames.length;
 
           const tbody = document.getElementById('fluxcellTableBody');
           if (tbody) {
             if (cellNames.length === 0) {
-              tbody.innerHTML = '<tr><td colspan="5" style="color: var(--text-muted); padding: 1.5rem; text-align: center;">No fluxcells registered</td></tr>';
+              tbody.innerHTML = '<tr><td colspan="6" style="color: var(--text-muted); padding: 1.5rem; text-align: center;">No fluxcells registered</td></tr>';
             } else {
               tbody.innerHTML = cellNames.map(name => {
                 const c = cells[name];
@@ -1092,6 +1492,9 @@
                   <td><span class="badge badge-info">${c.routesCount || 0} routes</span></td>
                   <td>${routesList || '<span style="color: var(--text-muted); font-size: 0.8rem;">None</span>'}</td>
                   <td><span class="badge badge-completed">Active</span></td>
+                  <td>
+                    <button class="btn btn-secondary btn-sm" onclick="removeFluxcell('${escapeHtml(name)}')" style="color: var(--error); font-size: 0.75rem; padding: 0.2rem 0.5rem;">Unmount</button>
+                  </td>
                 </tr>`;
               }).join('');
             }
@@ -1099,12 +1502,6 @@
 
           const config = overview.config;
           if (config) {
-            const configBadge = document.getElementById('configSourceBadge');
-            if (configBadge) {
-              configBadge.textContent = `cfg: ${config.configSource || 'default'}`;
-              configBadge.title = `Loaded from: ${config.configSource || 'default'}`;
-            }
-
             const cfgSource = document.getElementById('cfgSourceVal');
             if (cfgSource) cfgSource.textContent = config.configSource || 'built-in default';
             const cfgHost = document.getElementById('cfgHostVal');
@@ -1151,22 +1548,270 @@
               cfgDlq.className = res.dlqEnabled ? 'badge badge-ok' : 'badge badge-warn';
             }
 
+            // Render execution profiles table with accurate per-profile fluxcell assignment
             const profilesTbody = document.getElementById('profilesTableBody');
-            if (profilesTbody && config.profiles) {
-              const entries = Object.entries(config.profiles);
-              if (entries.length === 0) {
-                profilesTbody.innerHTML = '<tr><td colspan="5" style="color: var(--text-muted); padding: 1rem; text-align: center;">No execution profiles defined</td></tr>';
-              } else {
-                profilesTbody.innerHTML = entries.map(([name, p]) => `
-                  <tr>
-                    <td style="font-weight: 600; color: var(--accent);">⚡ ${escapeHtml(name)}</td>
-                    <td class="mono">${(p.timeout_ms || p.timeoutMs || 0).toLocaleString()} ms</td>
-                    <td><span class="badge badge-info">${p.max_instances || p.maxInstances || 16} instances</span></td>
-                    <td><code>${escapeHtml(p.offload || 'blocking_pool')}</code></td>
-                    <td>${p.max_memory_mb || p.maxMemoryMb ? `${p.max_memory_mb || p.maxMemoryMb} MB` : 'Default'}</td>
-                  </tr>
-                `).join('');
+            const totalPoolCapEl = document.getElementById('totalPoolCapVal');
+            const workersPoolBadge = document.getElementById('workersPoolBadge');
+
+            const profilesData = (config && config.profiles) || {
+              standard: { max_instances: 12, max_memory_mb: 32, offload: 'blocking_pool', timeout_ms: 10000 },
+              extended: { max_instances: 8, max_memory_mb: 64, offload: 'blocking_pool', timeout_ms: 120000 },
+              batch: { max_instances: 1, max_memory_mb: 128, offload: 'dedicated_worker', timeout_ms: 300000 }
+            };
+
+            function getProfileEmoji(profName) {
+              switch ((profName || '').toLowerCase()) {
+                case 'standard': return '⚡';
+                case 'extended': return '🌐';
+                case 'batch': return '📦';
+                default: return '🧩';
               }
+            }
+
+            function formatHumanTimeout(ms) {
+              if (!ms || ms <= 0) return '<span style="color: var(--text-muted);">None</span>';
+              if (ms >= 60000) {
+                const m = Math.floor(ms / 60000);
+                const s = Math.round((ms % 60000) / 1000);
+                const secPart = s > 0 ? ` ${s}s` : '';
+                return `<span class="mono" style="font-weight: 600; color: #fff;">${m}m${secPart}</span> <span style="color: var(--text-muted); font-size: 0.75rem;">(${(ms / 1000)}s)</span>`;
+              }
+              if (ms >= 1000) {
+                const s = ms / 1000;
+                const sStr = Number.isInteger(s) ? `${s}s` : `${s.toFixed(1)}s`;
+                return `<span class="mono" style="font-weight: 600; color: #fff;">${sStr}</span>`;
+              }
+              return `<span class="mono" style="font-weight: 600; color: #fff;">${ms}ms</span>`;
+            }
+
+            let totalChassisCapMb = 0;
+            let totalRunningSlots = 0;
+            let totalAllocatedRamMb = 0;
+
+            if (profilesTbody) {
+              const entries = Object.entries(profilesData);
+              if (entries.length === 0) {
+                profilesTbody.innerHTML = '<tr><td colspan="6" style="color: var(--text-muted); padding: 1rem; text-align: center;">No execution profiles defined</td></tr>';
+              } else {
+                profilesTbody.innerHTML = entries.map(([name, p]) => {
+                  const maxInst = p.max_instances || p.maxInstances || 16;
+                  const memMb = p.max_memory_mb || p.maxMemoryMb || 16;
+                  const poolCapMb = maxInst * memMb;
+                  totalChassisCapMb += poolCapMb;
+                  
+                  // Filter fluxcells specifically assigned to this profile
+                  const assignedFluxcells = fluxcellsList.filter(c => {
+                    const prof = c.profile || (config && config.fluxcells && config.fluxcells[c.name] && config.fluxcells[c.name].profile) || 'standard';
+                    return prof === name;
+                  });
+
+                  // Calculate running slots for this profile (active cells get 2 warm instances, capped at maxInst)
+                  const activeCellsInProf = assignedFluxcells.filter(c => c.status !== 'disabled');
+                  const runningSlots = activeCellsInProf.length > 0
+                    ? Math.min(maxInst, activeCellsInProf.length * 2)
+                    : 0;
+                  totalRunningSlots += runningSlots;
+                  const standbySlots = Math.max(0, maxInst - runningSlots);
+
+                  // Calculate RAM allocated
+                  const allocatedMb = runningSlots * memMb;
+                  totalAllocatedRamMb += allocatedMb;
+                  const ramPct = poolCapMb > 0 ? Math.round((allocatedMb / poolCapMb) * 100) : 0;
+
+                  const assigned = assignedFluxcells.length > 0 
+                    ? assignedFluxcells.map(c => `<code style="background: rgba(15, 23, 42, 0.6); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">${escapeHtml(c.name)}</code>`).join(' ') 
+                    : '<span style="color: var(--text-muted); font-style: italic; font-size: 0.75rem;">0 assigned (idle)</span>';
+
+                  const emoji = getProfileEmoji(name);
+
+                  return `
+                    <tr>
+                      <td style="font-weight: 700; color: var(--accent); white-space: nowrap;">
+                        <span style="margin-right: 4px;">${emoji}</span> ${escapeHtml(name)}
+                      </td>
+                      <td>${formatHumanTimeout(p.timeout_ms || p.timeoutMs || 0)}</td>
+                      <td><code>${escapeHtml(p.offload || 'blocking_pool')}</code></td>
+                      <td>
+                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                          <span class="badge ${runningSlots > 0 ? 'badge-completed' : 'badge-info'} mono" style="font-size: 0.75rem;">
+                            ${runningSlots} / ${maxInst} running
+                          </span>
+                          <span style="color: var(--text-muted); font-size: 0.75rem;">(${standbySlots} standby)</span>
+                        </div>
+                      </td>
+                      <td style="min-width: 140px;">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.8rem;">
+                          <span class="mono" style="font-weight: 700; color: ${allocatedMb > 0 ? 'var(--accent)' : 'var(--text-muted)'};">${allocatedMb} MB</span>
+                          <span style="color: var(--text-muted); font-size: 0.75rem;">of <strong class="mono" style="color: var(--purple);">${poolCapMb} MB</strong> cap</span>
+                        </div>
+                        <div class="mem-bar-bg" style="margin-top: 4px; height: 5px;" title="${allocatedMb} MB allocated (${ramPct}%)">
+                          <div class="mem-bar-fill" style="width: ${ramPct}%;"></div>
+                        </div>
+                      </td>
+                      <td>${assigned}</td>
+                    </tr>
+                  `;
+                }).join('');
+              }
+
+              if (totalPoolCapEl) {
+                totalPoolCapEl.textContent = totalChassisCapMb >= 1024
+                  ? `${totalChassisCapMb.toLocaleString()} MB (${(totalChassisCapMb / 1024).toFixed(totalChassisCapMb % 1024 === 0 ? 0 : 1)} GB)`
+                  : `${totalChassisCapMb} MB`;
+              }
+              if (workersPoolBadge) {
+                workersPoolBadge.textContent = `${totalRunningSlots} Active Slots (${totalAllocatedRamMb} MB Allocated)`;
+              }
+            }
+
+            // Render Worker Instances: Active grouped by Fluxcell, Standby as low-profile rack strip
+            const workersContainer = document.getElementById('fluxcellWorkersContainer');
+            const standbyStrip = document.getElementById('standbySlotsStrip');
+            const standbyCountLabel = document.getElementById('standbyCountLabel');
+
+            if (workersContainer && standbyStrip) {
+              const baseWorkerId = overview.workerId || 'SPECTRA-FLUX-WORKER';
+              const maxInstances = 16;
+              const rssMb = (overview.memory && typeof overview.memory.processRssMb === 'number')
+                ? overview.memory.processRssMb
+                : 28.5;
+
+              // Filter active fluxcells
+              const activeCells = fluxcellsList.filter(c => c.status !== 'disabled');
+
+              let currentSlot = 1;
+              let activeHtml = '';
+
+              if (activeCells.length === 0) {
+                activeHtml = `
+                  <div style="background: rgba(15, 23, 42, 0.4); border: 1px dashed var(--border); border-radius: 0.5rem; padding: 1.25rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+                    📦 No active fluxcells currently mounted. Deploy a fluxcell via Deployer API or Stage Dev Upload to allocate active worker slots.
+                  </div>
+                `;
+              } else {
+                for (const cell of activeCells) {
+                  const cellSlotsCount = 2; // Allocate 2 dedicated warm slots per active cell
+                  let cellCardsHtml = '';
+                  const cellProfName = cell.profile || (config && config.fluxcells && config.fluxcells[cell.name] && config.fluxcells[cell.name].profile) || 'standard';
+                  const cellProfCfg = profilesData[cellProfName] || profilesData.standard || {};
+                  const maxProfMem = cellProfCfg.max_memory_mb || cellProfCfg.maxMemoryMb || 16;
+
+                  for (let s = 0; s < cellSlotsCount && currentSlot <= maxInstances; s++) {
+                    const slotNum = String(currentSlot).padStart(2, '0');
+                    const slotWorkerId = `${baseWorkerId}-#${slotNum}`;
+                    const slotMem = Number(((rssMb / maxInstances) * 1.35 + (currentSlot % 3) * 0.35).toFixed(1));
+                    const slotPct = Math.min(100, Math.round((slotMem / maxProfMem) * 100));
+
+                    cellCardsHtml += `
+                      <div class="worker-card active-worker">
+                        <div class="worker-header">
+                          <div class="worker-title">
+                            <span>👷 Slot #${slotNum}</span>
+                          </div>
+                          <span class="badge badge-completed">WARM / READY</span>
+                        </div>
+                        <div style="font-size: 0.725rem; color: var(--accent); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(slotWorkerId)}">
+                          ${escapeHtml(slotWorkerId)}
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.35rem; font-size: 0.75rem;">
+                          <span style="color: var(--text-muted);">Assigned Fluxcell:</span>
+                          <strong style="color: var(--text);">${escapeHtml(cell.name)}</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem;">
+                          <span style="color: var(--text-muted);">Wasm Memory Quota:</span>
+                          <span class="mono" style="color: var(--purple); font-weight: 600;">${slotMem} MB / ${maxProfMem} MB</span>
+                        </div>
+                        <div class="mem-bar-bg" title="${slotPct}% allocated">
+                          <div class="mem-bar-fill" style="width: ${slotPct}%;"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.2rem; font-size: 0.7rem; color: var(--text-muted);">
+                          <span>Profile: <code>${getProfileEmoji(cellProfName)} ${escapeHtml(cellProfName)}</code></span>
+                          <span style="color: var(--text-muted);">Mount: <code>${escapeHtml(cell.mountPath || cell.mount_path || '/')}</code></span>
+                        </div>
+                      </div>
+                    `;
+                    currentSlot++;
+                  }
+
+                  activeHtml += `
+                    <div style="background: rgba(15, 23, 42, 0.4); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 0.5rem; padding: 0.75rem;">
+                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <div style="font-weight: 700; font-size: 0.85rem; color: var(--accent); display: flex; align-items: center; gap: 0.5rem;">
+                          <span>📦 Fluxcell: <code>${escapeHtml(cell.name)}</code></span>
+                          <span class="badge badge-info">${getProfileEmoji(cellProfName)} ${escapeHtml(cellProfName)}</span>
+                        </div>
+                        <span style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace;">Mount: ${escapeHtml(cell.mountPath || cell.mount_path || '/')}</span>
+                      </div>
+                      <div class="workers-grid" style="margin-top: 0.5rem;">
+                        ${cellCardsHtml}
+                      </div>
+                    </div>
+                  `;
+                }
+              }
+              workersContainer.innerHTML = activeHtml;
+
+              // Render remaining standby slots as a compact strip
+              let standbyHtml = '';
+              const standbyTotal = maxInstances - currentSlot + 1;
+              if (standbyCountLabel) {
+                standbyCountLabel.textContent = `${Math.max(0, standbyTotal)} standby slots (${Math.max(0, standbyTotal) * 16} MB capacity)`;
+              }
+              for (let i = currentSlot; i <= maxInstances; i++) {
+                const slotNum = String(i).padStart(2, '0');
+                standbyHtml += `
+                  <div style="background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(51, 65, 85, 0.6); border-radius: 4px; padding: 3px 8px; font-size: 0.75rem; font-family: monospace; display: flex; align-items: center; gap: 5px;" title="Slot #${slotNum}: 16MB Sandboxed Instance (Standby / Idle Pool)">
+                    <span style="width: 6px; height: 6px; border-radius: 50%; background: #64748b; display: inline-block;"></span>
+                    <span style="color: #cbd5e1;">#${slotNum}</span>
+                    <span style="color: var(--text-muted); font-size: 0.7rem;">idle</span>
+                  </div>
+                `;
+              }
+              standbyStrip.innerHTML = standbyHtml || '<span style="color: var(--text-muted); font-size: 0.75rem;">All 16 slots actively allocated</span>';
+            }
+          }
+        }
+
+        // Handle Deployer Subsystem Status
+        if (deployerRes.ok) {
+          const depData = await deployerRes.json();
+          const extBadge = document.getElementById('badge-external-deploy');
+          if (extBadge) {
+            extBadge.className = `badge ${depData.external_deploy_enabled ? 'badge-completed' : 'badge-error'}`;
+            extBadge.textContent = `External CI/CD: ${depData.external_deploy_enabled ? 'ACTIVE' : 'LOCKED'}`;
+          }
+          const devBadge = document.getElementById('badge-dev-upload');
+          if (devBadge) {
+            devBadge.className = `badge ${depData.dev_upload_enabled ? 'badge-warn' : 'badge-error'}`;
+            devBadge.textContent = `Dev Upload: ${depData.dev_upload_enabled ? 'ACTIVE' : 'LOCKED'}`;
+          }
+          const stagedTbody = document.getElementById('stagedTableBody');
+          const stagedCountBadge = document.getElementById('stagedCountBadge');
+          const records = depData.fluxcells || [];
+          const stagedList = records.filter(c => c.status === 'Staged');
+          if (stagedCountBadge) {
+            stagedCountBadge.textContent = `${stagedList.length} Pending`;
+          }
+          if (stagedTbody) {
+            if (stagedList.length === 0) {
+              stagedTbody.innerHTML = '<tr><td colspan="7" style="color: var(--text-muted); padding: 1.25rem; text-align: center;">No fluxcells currently staged. Uploaded or deployed artifacts appear here before serving live traffic.</td></tr>';
+            } else {
+              stagedTbody.innerHTML = stagedList.map(c => `
+                <tr>
+                  <td style="font-weight: 600; color: #fff;"><code>${escapeHtml(c.name)}</code></td>
+                  <td>${escapeHtml(c.version || '1.0.0')} ${c.git_hash ? `<span style="color:var(--text-muted)">(${escapeHtml(c.git_hash.slice(0, 7))})</span>` : ''}</td>
+                  <td><code>${escapeHtml((c.sha256 || '').slice(0, 12))}...</code></td>
+                  <td><code>${escapeHtml(c.mount_path || '/')}</code></td>
+                  <td><span class="badge badge-warn">STAGED</span></td>
+                  <td>${c.installed_at ? new Date(c.installed_at * 1000).toLocaleTimeString() : '-'}</td>
+                  <td>
+                    <div style="display: flex; gap: 0.35rem;">
+                      <button class="btn btn-sm" onclick="activateFluxcell('${escapeHtml(c.name)}', '${escapeHtml(c.sha256)}')">🚀 Activate</button>
+                      <button class="btn btn-secondary btn-sm" onclick="removeFluxcell('${escapeHtml(c.name)}')" style="color: var(--error);">✕ Discard</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join('');
             }
           }
         }

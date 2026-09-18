@@ -32,18 +32,49 @@ pub fn handle_overview(
         let r = router.read().unwrap_or_else(|e| e.into_inner());
         r.get_fluxcells_summary()
     };
+    let rss_bytes = get_process_rss_bytes().unwrap_or(0);
+    let rss_mb = (rss_bytes as f64) / (1024.0 * 1024.0);
     let mut val = serde_json::json!({
         "workerId": telemetry.worker_id,
         "uptimeSeconds": uptime,
         "processedEvents": processed,
         "errors": errors,
         "fluxcells": cells,
+        "memory": {
+            "processRssBytes": rss_bytes,
+            "processRssMb": (rss_mb * 100.0).round() / 100.0,
+        }
     });
     if let Some(cfg) = config_summary {
         val["config"] = cfg.clone();
     }
     json_response(StatusCode::OK, val.to_string())
 }
+
+#[cfg(target_os = "linux")]
+fn get_process_rss_bytes() -> Option<u64> {
+    std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| {
+        s.split_whitespace().nth(1)?.parse::<u64>().ok().map(|pages| pages * 4096)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn get_process_rss_bytes() -> Option<u64> {
+    std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()
+        .and_then(|out| {
+            let s = String::from_utf8_lossy(&out.stdout);
+            s.trim().parse::<u64>().ok().map(|kb| kb * 1024)
+        })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn get_process_rss_bytes() -> Option<u64> {
+    None
+}
+
 
 pub fn handle_config(config_summary: Option<&serde_json::Value>) -> Response<Full<bytes::Bytes>> {
     if let Some(cfg) = config_summary {

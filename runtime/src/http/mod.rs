@@ -682,7 +682,7 @@ mod tests {
         assert_eq!(resp.headers().get("Content-Type").unwrap(), "text/html; charset=utf-8");
         let html_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let html_str = String::from_utf8_lossy(&html_bytes);
-        assert!(html_str.contains("Live Logs Active"));
+        assert!(html_str.contains("SpectraFlux Admin Console"));
 
         let req = Request::builder().uri("/dashboard").body(Full::new(bytes::Bytes::new())).unwrap();
         let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None, None).await.unwrap();
