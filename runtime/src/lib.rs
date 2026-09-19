@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod deployer;
 pub mod http;
+pub mod mailer;
 pub mod storage;
 pub mod telemetry;
 pub mod wasm;

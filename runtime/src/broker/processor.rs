@@ -447,25 +447,42 @@ impl EventProcessor {
                 detail: Some(format!("ttl: 900s, email: {}", email)),
             }];
 
+            // Dispatch transactional email via configured provider (Mailtrap, Resend, Postmark, SendGrid, SMTP, or Console)
+            let mailer_cfg = crate::mailer::MailerConfig::from_env();
+            let verify_url = format!("{}/auth/verify?token={}", mailer_cfg.base_url, token);
+            let rendered = fluxcell_magic_link::render_email_templates(&email, &verify_url);
+            let mail_res = crate::mailer::send_transactional_email(
+                &mailer_cfg,
+                &email,
+                &rendered.subject,
+                &rendered.html_body,
+                &rendered.text_body,
+            )
+            .await;
+
             let step_duration_ms = step_start.elapsed().as_secs_f64() * 1000.0;
+            let mail_err = mail_res.err();
             steps.push(FluxcellStepSpan {
                 fluxcell_name: "magic_link".to_string(),
                 topic: msg.topic.clone(),
                 function_name: "mint_magic_token".to_string(),
                 start_time: step_start_iso,
                 duration_ms: step_duration_ms,
-                status: "ok".to_string(),
-                input_preview: Some(serde_json::json!({ "email": email })),
-                output_preview: Some(serde_json::json!({ "status": "minted", "token": token })),
-                error: None,
+                status: if mail_err.is_none() { "ok".to_string() } else { "email_dispatch_error".to_string() },
+                input_preview: Some(serde_json::json!({ "email": email, "provider": format!("{:?}", mailer_cfg.provider) })),
+                output_preview: Some(serde_json::json!({ "status": "minted", "token": token, "verify_url": verify_url })),
+                error: mail_err.clone(),
                 host_calls,
             });
 
             self.telemetry.record_log(
-                "INFO",
+                if mail_err.is_none() { "INFO" } else { "WARN" },
                 &format!(
-                    "Minted magic link token for {} in storage (token: {})",
-                    email, token
+                    "Minted magic link token for {} in storage (token: {}, provider: {:?}, status: {})",
+                    email,
+                    token,
+                    mailer_cfg.provider,
+                    if let Some(e) = mail_err { format!("mail_failed: {}", e) } else { "mail_dispatched".to_string() }
                 ),
                 None,
             );
