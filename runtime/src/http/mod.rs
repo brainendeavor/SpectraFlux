@@ -395,6 +395,34 @@ where
     B::Data: Send,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    handle_request_with_dynamic_state(
+        req,
+        router,
+        telemetry,
+        dispatcher,
+        deployer,
+        trace_storage,
+        config_summary,
+        None,
+    )
+    .await
+}
+
+pub async fn handle_request_with_dynamic_state<B>(
+    req: Request<B>,
+    router: Arc<std::sync::RwLock<FluxRouter>>,
+    telemetry: Arc<crate::telemetry::TelemetryClient>,
+    dispatcher: Arc<dyn FluxcellHttpDispatcher>,
+    deployer: Option<Arc<crate::deployer::FluxcellDeployer>>,
+    trace_storage: Option<Arc<crate::telemetry::DomainTraceStorage>>,
+    config_summary: Option<Arc<serde_json::Value>>,
+    dynamic_state: Option<Arc<arc_swap::ArcSwap<crate::dynamic_state::DynamicChassisState>>>,
+) -> Result<Response<Full<bytes::Bytes>>, std::convert::Infallible>
+where
+    B: hyper::body::Body + Send + 'static,
+    B::Data: Send,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
     let method = req.method().to_string();
     let raw_path = req.uri().path().to_string();
     let query_string = req.uri().query().map(|q| q.to_string());
@@ -431,11 +459,39 @@ where
     if path == "/admin" || path == "/admin/" || path == "/dashboard" {
         return Ok(handlers::admin::handle_dashboard());
     }
-    if path == "/admin/api/v1/overview" {
-        return Ok(handlers::admin::handle_overview(&telemetry, &router, config_summary.as_deref()));
+    if path == "/admin/api/v1/overview" || path == "/admin/api/overview" {
+        let current_cfg_summary = if let Some(ds) = &dynamic_state {
+            let s = ds.load();
+            Some(s.config.to_sanitized_json(&s.config_path))
+        } else {
+            config_summary.as_deref().cloned()
+        };
+        return Ok(handlers::admin::handle_overview(&telemetry, &router, current_cfg_summary.as_ref()));
     }
-    if path == "/admin/api/v1/config" && method == "GET" {
-        return Ok(handlers::admin::handle_config(config_summary.as_deref()));
+    if (path == "/admin/api/v1/config" || path == "/admin/api/config") && method == "GET" {
+        return Ok(handlers::admin::handle_config_get(
+            dynamic_state.as_ref(),
+            config_summary.as_deref(),
+        ));
+    }
+    if (path == "/admin/api/v1/config/validate" || path == "/admin/api/config/validate") && method == "POST" {
+        return Ok(handlers::admin::handle_config_validate(req).await);
+    }
+    if (path == "/admin/api/v1/config" || path == "/admin/api/config") && method == "POST" {
+        return Ok(handlers::admin::handle_config_update(
+            req,
+            query_string.as_deref(),
+            dynamic_state.as_ref(),
+            &telemetry,
+        ).await);
+    }
+    if (path == "/admin/api/v1/config/reload" || path == "/admin/api/config/reload") && method == "POST" {
+        return Ok(handlers::admin::handle_config_reload(
+            req,
+            query_string.as_deref(),
+            dynamic_state.as_ref(),
+            &telemetry,
+        ).await);
     }
     if path == "/admin/api/v1/traces" && method == "GET" {
         return Ok(handlers::admin::handle_traces(trace_storage.as_ref(), query_string.as_deref()).await);
@@ -1393,5 +1449,204 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(json["workerId"], "worker-cfg-test");
         assert_eq!(json["config"]["configSource"], "test-config.toml");
+    }
+
+    #[tokio::test]
+    async fn test_admin_control_plane_config_endpoints() {
+        let router = Arc::new(std::sync::RwLock::new(FluxRouter::new()));
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "worker-ctrl-test".to_string(),
+            "in_memory".to_string(),
+            None,
+            100,
+        ));
+        let dispatcher = Arc::new(MockDispatcher {
+            status: 200,
+            headers: vec![],
+            body: vec![],
+            should_fail: false,
+        });
+
+        // Setup temporary config file on disk
+        let tmp_dir = std::env::temp_dir().join(format!("spectra_flux_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let test_config_path = tmp_dir.join("test-spectra-flux.toml");
+
+        let initial_toml = r#"
+            port = 8081
+            host = "0.0.0.0"
+
+            [mailer]
+            provider = "console"
+            from_email = "default@example.com"
+        "#;
+        std::fs::write(&test_config_path, initial_toml).unwrap();
+
+        let initial_state = crate::dynamic_state::DynamicChassisState::new_from_toml(
+            initial_toml,
+            test_config_path.to_string_lossy().to_string(),
+            1,
+        ).unwrap();
+        let dynamic_state = Arc::new(arc_swap::ArcSwap::new(Arc::new(initial_state)));
+
+        // 1. Test GET /admin/api/v1/config with dynamic state
+        let req = Request::builder()
+            .method("GET")
+            .uri("/admin/api/v1/config")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+
+        let resp = handle_request_with_dynamic_state(
+            req,
+            router.clone(),
+            telemetry.clone(),
+            dispatcher.clone(),
+            None,
+            None,
+            None,
+            Some(dynamic_state.clone()),
+        ).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["backend"], "disk");
+        assert_eq!(json["version"], 1);
+        assert!(json["content"].as_str().unwrap().contains("default@example.com"));
+
+        // 2. Test POST /admin/api/v1/config/validate with valid TOML
+        let valid_candidate = r#"
+            port = 8090
+            host = "0.0.0.0"
+
+            [mailer]
+            provider = "console"
+
+            [mailer.tenants.coeval]
+            provider = "resend"
+            api_key = "re_live_secret"
+            from_email = "auth@coeval.bio"
+            from_name = "CoEval"
+            app_name = "CoEval"
+        "#;
+
+        let validate_req = Request::builder()
+            .method("POST")
+            .uri("/admin/api/v1/config/validate")
+            .header("Content-Type", "application/json")
+            .body(Full::new(bytes::Bytes::from(
+                serde_json::json!({ "content": valid_candidate }).to_string()
+            )))
+            .unwrap();
+
+        let resp = handle_request_with_dynamic_state(
+            validate_req,
+            router.clone(),
+            telemetry.clone(),
+            dispatcher.clone(),
+            None,
+            None,
+            None,
+            Some(dynamic_state.clone()),
+        ).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let val_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(val_json["valid"], true);
+        assert_eq!(val_json["summary"]["tenants_count"], 1);
+        assert_eq!(val_json["summary"]["port"], 8090);
+
+        // 3. Test POST /admin/api/v1/config/validate with invalid TOML
+        let invalid_req = Request::builder()
+            .method("POST")
+            .uri("/admin/api/v1/config/validate")
+            .header("Content-Type", "application/json")
+            .body(Full::new(bytes::Bytes::from(
+                serde_json::json!({ "content": "this is [invalid toml :::" }).to_string()
+            )))
+            .unwrap();
+
+        let resp = handle_request_with_dynamic_state(
+            invalid_req,
+            router.clone(),
+            telemetry.clone(),
+            dispatcher.clone(),
+            None,
+            None,
+            None,
+            Some(dynamic_state.clone()),
+        ).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let inval_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(inval_json["valid"], false);
+        assert!(!inval_json["errors"].as_array().unwrap().is_empty());
+
+        // 4. Test POST /admin/api/v1/config (save & hot-reload)
+        let save_req = Request::builder()
+            .method("POST")
+            .uri("/admin/api/v1/config")
+            .header("Content-Type", "application/json")
+            .body(Full::new(bytes::Bytes::from(
+                serde_json::json!({ "content": valid_candidate, "reload": true }).to_string()
+            )))
+            .unwrap();
+
+        let resp = handle_request_with_dynamic_state(
+            save_req,
+            router.clone(),
+            telemetry.clone(),
+            dispatcher.clone(),
+            None,
+            None,
+            None,
+            Some(dynamic_state.clone()),
+        ).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let save_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(save_json["success"], true);
+        assert_eq!(save_json["version"], 2);
+
+        // Verify state is updated in memory
+        let current_state = dynamic_state.load();
+        assert_eq!(current_state.version, 2);
+        assert_eq!(current_state.config.port, 8090);
+        let coeval_cfg = current_state.mailer_registry.get_config(Some("coeval"));
+        assert_eq!(coeval_cfg.from_email, "auth@coeval.bio");
+
+        // Verify written to disk
+        let disk_content = std::fs::read_to_string(&test_config_path).unwrap();
+        assert!(disk_content.contains("auth@coeval.bio"));
+
+        // 5. Test POST /admin/api/v1/config/reload (reload from disk)
+        let reload_req = Request::builder()
+            .method("POST")
+            .uri("/admin/api/v1/config/reload")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+
+        let resp = handle_request_with_dynamic_state(
+            reload_req,
+            router.clone(),
+            telemetry.clone(),
+            dispatcher.clone(),
+            None,
+            None,
+            None,
+            Some(dynamic_state.clone()),
+        ).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let reload_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(reload_json["success"], true);
+        assert_eq!(reload_json["version"], 3);
+
+        // Clean up temporary directory
+        let _ = std::fs::remove_dir_all(&tmp_dir);
     }
 }

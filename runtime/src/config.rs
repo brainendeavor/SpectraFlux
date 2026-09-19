@@ -29,6 +29,8 @@ pub struct FluxConfig {
     pub deployer: DeployerConfig,
     #[serde(default)]
     pub resilience: ResilienceConfig,
+    #[serde(default)]
+    pub mailer: MailerSectionConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +56,7 @@ impl Default for FluxConfig {
             fluxcells: HashMap::new(),
             deployer: DeployerConfig::default(),
             resilience: ResilienceConfig::default(),
+            mailer: MailerSectionConfig::default(),
         }
     }
 }
@@ -235,6 +238,7 @@ impl FluxConfig {
                 storage_dir: default_storage_dir(),
             },
             resilience: ResilienceConfig::default(),
+            mailer: MailerSectionConfig::default(),
         }
     }
 
@@ -318,7 +322,7 @@ impl FluxConfig {
                 "dlqEnabled": self.resilience.dlq_enabled,
                 "dlqTopicPrefix": self.resilience.dlq_topic_prefix,
             },
-            "mailer": crate::mailer::MailerConfig::from_env().to_sanitized_json(),
+            "mailer": crate::mailer::MailerRegistry::from_config(&self.mailer).to_sanitized_json(),
         })
     }
 
@@ -698,6 +702,74 @@ impl Default for ResilienceConfig {
     }
 }
 
+/// Tenant-specific mailer override settings
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct MailerTenantConfig {
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub from_email: Option<String>,
+    #[serde(default)]
+    pub from_name: Option<String>,
+    #[serde(default)]
+    pub app_name: Option<String>,
+    #[serde(default)]
+    pub logo_url: Option<String>,
+    #[serde(default)]
+    pub accent_color: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub mailtrap_inbox_id: Option<String>,
+    #[serde(default)]
+    pub smtp_host: Option<String>,
+    #[serde(default)]
+    pub smtp_port: Option<u16>,
+    #[serde(default)]
+    pub smtp_user: Option<String>,
+    #[serde(default)]
+    pub smtp_pass: Option<String>,
+    #[serde(default)]
+    pub smtp_secure: Option<bool>,
+}
+
+/// Global mailer configuration section with multi-tenant overrides
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct MailerSectionConfig {
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub from_email: Option<String>,
+    #[serde(default)]
+    pub from_name: Option<String>,
+    #[serde(default)]
+    pub app_name: Option<String>,
+    #[serde(default)]
+    pub logo_url: Option<String>,
+    #[serde(default)]
+    pub accent_color: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub mailtrap_inbox_id: Option<String>,
+    #[serde(default)]
+    pub smtp_host: Option<String>,
+    #[serde(default)]
+    pub smtp_port: Option<u16>,
+    #[serde(default)]
+    pub smtp_user: Option<String>,
+    #[serde(default)]
+    pub smtp_pass: Option<String>,
+    #[serde(default)]
+    pub smtp_secure: Option<bool>,
+    #[serde(default)]
+    pub tenants: HashMap<String, MailerTenantConfig>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -997,5 +1069,44 @@ mod tests {
         assert_eq!(resolved.max_instances, 8);
         assert_eq!(resolved.offload, OffloadStrategy::DedicatedWorker);
         assert_eq!(resolved.max_memory_bytes, 128 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_mailer_and_tenants_toml_deserialization() {
+        let toml_str = r#"
+            [mailer]
+            provider = "console"
+            from_email = "base@example.com"
+            from_name = "Base System"
+            base_url = "https://base.example.com"
+
+            [mailer.tenants.coeval]
+            provider = "resend"
+            api_key = "re_live_999888777"
+            from_email = "auth@coeval.bio"
+            from_name = "CoEval Biological"
+            app_name = "CoEval"
+            base_url = "https://coeval.bio"
+
+            [mailer.tenants.humanshirehumans]
+            provider = "mailtrap"
+            api_key = "mt_live_111222333"
+            from_email = "auth@humanshirehumans.com"
+            from_name = "Humans Hire Humans"
+        "#;
+        let cfg = FluxConfig::from_toml_str(toml_str).unwrap();
+        assert_eq!(cfg.mailer.provider.as_deref(), Some("console"));
+        assert_eq!(cfg.mailer.from_email.as_deref(), Some("base@example.com"));
+        assert_eq!(cfg.mailer.tenants.len(), 2);
+
+        let coeval = &cfg.mailer.tenants["coeval"];
+        assert_eq!(coeval.provider.as_deref(), Some("resend"));
+        assert_eq!(coeval.api_key.as_deref(), Some("re_live_999888777"));
+        assert_eq!(coeval.from_email.as_deref(), Some("auth@coeval.bio"));
+        assert_eq!(coeval.base_url.as_deref(), Some("https://coeval.bio"));
+
+        let hhh = &cfg.mailer.tenants["humanshirehumans"];
+        assert_eq!(hhh.provider.as_deref(), Some("mailtrap"));
+        assert_eq!(hhh.api_key.as_deref(), Some("mt_live_111222333"));
     }
 }

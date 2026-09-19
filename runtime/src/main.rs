@@ -35,6 +35,21 @@ async fn main() -> Result<()> {
 
     let config_summary = Arc::new(config.to_sanitized_json(&resolved_config_path));
 
+    let raw_toml = if std::path::Path::new(&resolved_config_path).exists() {
+        std::fs::read_to_string(&resolved_config_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let dynamic_state = Arc::new(arc_swap::ArcSwap::new(Arc::new(
+        spectra_flux::dynamic_state::DynamicChassisState::new(
+            config.clone(),
+            raw_toml,
+            resolved_config_path.clone(),
+            1,
+        ),
+    )));
+
     let worker_id = format!("spectra-flux-{}", uuid::Uuid::now_v7());
     log::info!("Instance Worker ID: {}", worker_id);
 
@@ -271,16 +286,19 @@ async fn main() -> Result<()> {
                 "deployer.>".to_string(),
             ];
             let group = config.broker.consumer_group.clone();
-            let processor = Arc::new(spectra_flux::broker::EventProcessor::new(
-                broker,
-                wasm_host.clone(),
-                telemetry.clone(),
-                storage.clone(),
-                deployer.clone(),
-                Some(trace_storage.clone()),
-                config.resilience.clone(),
-                worker_id.clone(),
-            ));
+            let processor = Arc::new(
+                spectra_flux::broker::EventProcessor::new(
+                    broker,
+                    wasm_host.clone(),
+                    telemetry.clone(),
+                    storage.clone(),
+                    deployer.clone(),
+                    Some(trace_storage.clone()),
+                    config.resilience.clone(),
+                    worker_id.clone(),
+                )
+                .with_dynamic_state(dynamic_state.clone()),
+            );
             processor.spawn_consumer_loop(subjects, group);
         }
         Err(e) => {
@@ -300,6 +318,7 @@ async fn main() -> Result<()> {
     let deployer_arc = deployer.clone();
     let trace_storage_arc = trace_storage.clone();
     let config_summary_arc = config_summary.clone();
+    let dynamic_state_arc = dynamic_state.clone();
 
     tokio::select! {
         _ = async {
@@ -319,10 +338,11 @@ async fn main() -> Result<()> {
                 let deployer_clone = deployer_arc.clone();
                 let trace_storage_clone = trace_storage_arc.clone();
                 let config_summary_clone = config_summary_arc.clone();
+                let dynamic_state_clone = dynamic_state_arc.clone();
 
                 tokio::spawn(async move {
                     let service = hyper::service::service_fn(move |req| {
-                        spectra_flux::http::handle_request_with_config(
+                        spectra_flux::http::handle_request_with_dynamic_state(
                             req,
                             router_clone.clone(),
                             tele_clone.clone(),
@@ -330,6 +350,7 @@ async fn main() -> Result<()> {
                             deployer_clone.clone(),
                             Some(trace_storage_clone.clone()),
                             Some(config_summary_clone.clone()),
+                            Some(dynamic_state_clone.clone()),
                         )
                     });
 

@@ -17,6 +17,7 @@ pub struct EventProcessor {
     trace_storage: Option<Arc<DomainTraceStorage>>,
     resilience: ResilienceConfig,
     worker_id: String,
+    dynamic_state: Option<Arc<arc_swap::ArcSwap<crate::dynamic_state::DynamicChassisState>>>,
 }
 
 impl EventProcessor {
@@ -39,7 +40,16 @@ impl EventProcessor {
             trace_storage,
             resilience,
             worker_id,
+            dynamic_state: None,
         }
+    }
+
+    pub fn with_dynamic_state(
+        mut self,
+        dynamic_state: Arc<arc_swap::ArcSwap<crate::dynamic_state::DynamicChassisState>>,
+    ) -> Self {
+        self.dynamic_state = Some(dynamic_state);
+        self
     }
 
     pub fn spawn_consumer_loop(self: Arc<Self>, subjects: Vec<String>, group: String) {
@@ -495,8 +505,23 @@ impl EventProcessor {
                 },
             ];
 
-            // Resolve dynamic email branding (payload override > 12-factor mailer_cfg defaults)
-            let mailer_cfg = crate::mailer::MailerConfig::from_env();
+            let tenant_override = payload_ref.and_then(|val| {
+                val.pointer("/request/gql/jsonBody/variables/tenant")
+                    .or_else(|| val.pointer("/variables/tenant"))
+                    .or_else(|| val.pointer("/tenant"))
+                    .or_else(|| val.pointer("/appName"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            });
+
+            // Resolve dynamic mailer configuration (tenant override > dynamic chassis state > 12-factor defaults)
+            let mailer_cfg = if let Some(ds) = &self.dynamic_state {
+                let s = ds.load();
+                s.mailer_registry.get_config(tenant_override.as_deref()).clone()
+            } else {
+                crate::mailer::MailerConfig::from_env()
+            };
+
             let branding = fluxcell_magic_link::EmailBranding {
                 app_name: app_name_override.unwrap_or_else(|| mailer_cfg.app_name.clone()),
                 logo_url: logo_url_override.or_else(|| mailer_cfg.logo_url.clone()),
@@ -532,7 +557,8 @@ impl EventProcessor {
                 input_preview: Some(serde_json::json!({
                     "email": email,
                     "appName": branding.app_name,
-                    "provider": format!("{:?}", mailer_cfg.provider)
+                    "provider": format!("{:?}", mailer_cfg.provider),
+                    "tenant": tenant_override,
                 })),
                 output_preview: Some(serde_json::json!({
                     "status": "minted",

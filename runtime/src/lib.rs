@@ -4,6 +4,7 @@ pub mod broker;
 pub mod config;
 pub mod db;
 pub mod deployer;
+pub mod dynamic_state;
 pub mod http;
 pub mod mailer;
 pub mod storage;

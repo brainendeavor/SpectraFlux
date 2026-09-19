@@ -609,6 +609,7 @@
       </div>
     </div>
     <div style="display: flex; gap: 0.75rem; align-items: center;">
+      <button class="btn btn-secondary btn-sm" onclick="openConfigModal()" style="display: flex; align-items: center; gap: 6px;" title="Chassis Configuration &amp; Control Plane (c)">⚙️ Config <kbd class="kbd-hint" style="font-size: 11px; padding: 1px 5px;">c</kbd></button>
       <button class="btn btn-secondary btn-sm" onclick="toggleShortcutsModal(true)" style="display: flex; align-items: center; gap: 6px;" title="Appliance Help &amp; Shortcuts (?)">Help <kbd class="kbd-hint" style="font-size: 11px; padding: 1px 5px;">?</kbd></button>
       <label style="font-size: 0.8125rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.35rem; cursor: pointer;">
         <input type="checkbox" id="autoRefresh" checked> Auto-refresh (2s)
@@ -959,6 +960,42 @@
       </div>
     </div>
 
+    <!-- Multi-Tenant Mailer Profiles Card -->
+    <div class="stat-card" style="margin-bottom: 1.5rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.75rem;">
+        <div>
+          <h3 style="font-size: 1rem; color: #ec4899; font-weight: 700; display: flex; align-items: center; gap: 0.5rem;">
+            <span>🏢 Multi-Tenant Mailer Profiles</span>
+            <span class="badge badge-info" id="tenantsCountBadge">0 Tenants</span>
+          </h3>
+          <p style="color: var(--text-muted); font-size: 0.8125rem; margin-top: 0.25rem;">
+            Named tenant routing profiles (<code style="color:#ec4899;">[mailer.tenants.&lt;name&gt;]</code>). Downstream events dynamically route to dedicated transactional providers, senders, and brandings.
+          </p>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-secondary btn-sm" onclick="openConfigModalWithTenantSnippet()" style="color: #ec4899; border-color: rgba(236, 72, 153, 0.4);">+ Add Tenant Profile</button>
+          <button class="btn btn-secondary btn-sm" onclick="openConfigModal()">⚙️ Open Config</button>
+        </div>
+      </div>
+      <div class="table-container">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Tenant Name</th>
+              <th>Provider</th>
+              <th>From Address</th>
+              <th>App Name &amp; Branding</th>
+              <th>API Key / Auth</th>
+              <th>Base URL</th>
+            </tr>
+          </thead>
+          <tbody id="tenantsTableBody">
+            <tr><td colspan="6" style="color: var(--text-muted); padding: 1.25rem; text-align: center;">No multi-tenant mailer profiles defined (downstream events fall back to chassis default mailer)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Execution Profiles & Worker Pool -->
     <div class="stat-card" style="margin-bottom: 1.5rem;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
@@ -1114,6 +1151,10 @@
         <kbd class="kbd-hint">r</kbd>
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: var(--text-muted);">Open Config &amp; Control Plane</span>
+        <kbd class="kbd-hint">c</kbd>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
         <span style="color: var(--text-muted);">Toggle Help &amp; Shortcuts</span>
         <kbd class="kbd-hint">?</kbd>
       </div>
@@ -1132,6 +1173,59 @@
     </div>
     <div class="drawer-body" id="drawerContent">
       <div style="color: var(--text-muted);">Select a trace to inspect.</div>
+    </div>
+  </div>
+
+  <!-- Configuration Editor Modal -->
+  <div id="config-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(4px);">
+    <div id="config-modal-dialog" style="width: 96vw; height: 92vh; max-width: 1400px; max-height: 94vh; display: flex; flex-direction: column; background: #0d1117; border: 1px solid #30363d; border-radius: 10px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85); overflow: hidden; box-sizing: border-box; transition: all 0.15s ease;">
+      <!-- Header -->
+      <div style="padding: 14px 20px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; background: #161b22; flex-shrink: 0;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 18px;">⚙️</span>
+          <h3 style="margin: 0; font-size: 16px; color: #f0f6fc;">Chassis Configuration &amp; Control Plane</h3>
+          <span id="config-backend-badge" class="badge badge-ok" style="font-size: 11px; text-transform: uppercase;">DISK</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button class="btn btn-secondary btn-sm" id="config-maximize-btn" onclick="toggleConfigMaximize()" title="Toggle Maximize" style="font-size: 13px; padding: 4px 8px;">⛶</button>
+          <button class="btn btn-secondary btn-sm" onclick="closeConfigModal()" title="Close (Esc)" style="font-weight: bold; padding: 4px 10px;">✕</button>
+        </div>
+      </div>
+
+      <!-- Metadata / Status Banner -->
+      <div style="padding: 8px 20px; background: #161b22; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; gap: 10px;">
+        <div>
+          Store: <strong id="config-descriptor" style="color: var(--accent); font-family: monospace;">--</strong>
+        </div>
+        <div style="display: flex; gap: 16px; align-items: center;">
+          <span style="color: #64748b; font-size: 11px;">Shortcuts: <kbd style="background:#21262d; padding:1px 5px; border-radius:3px; border:1px solid #30363d;">Cmd+/</kbd> Comment &bull; <kbd style="background:#21262d; padding:1px 5px; border-radius:3px; border:1px solid #30363d;">Tab</kbd> Indent</span>
+          <div>Revision: <strong id="config-version" style="color: var(--accent);">#1</strong></div>
+          <div>SHA: <strong id="config-hash" style="color: var(--purple); font-family: monospace;">--</strong></div>
+        </div>
+      </div>
+
+      <!-- Diagnostics / Validation Alert Banner -->
+      <div id="config-alert-banner" style="display: none; padding: 10px 20px; font-size: 12.5px; border-bottom: 1px solid #30363d;"></div>
+
+      <!-- TOML Editor Textarea -->
+      <div style="flex: 1; display: flex; flex-direction: column; padding: 14px 20px; background: #050911; min-height: 0;">
+        <textarea id="config-editor-textarea" spellcheck="false" style="width: 100%; height: 100%; resize: none; background: transparent; color: #7ee787; border: none; outline: none; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.5; white-space: pre; tab-size: 2;" placeholder="# Loading configuration TOML..."></textarea>
+      </div>
+
+      <!-- Auth Token Input & Action Toolbar -->
+      <div style="padding: 12px 20px; background: #161b22; border-top: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <label for="config-auth-token" style="font-size: 12px; color: var(--text-muted); font-weight: 500;" title="Enter the secret FLUX_ADMIN_TOKEN configured in your server environment variables to authorize saving changes.">🔑 Auth Token:</label>
+          <input type="password" id="config-auth-token" class="search-box" placeholder="FLUX_ADMIN_TOKEN" style="padding: 4px 8px; font-size: 12px; width: 190px; min-width: 150px;" title="Provide your server's FLUX_ADMIN_TOKEN env var to authenticate this save request.">
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <button class="btn btn-secondary btn-sm" onclick="insertTenantSnippet()" style="color: #ec4899; border-color: rgba(236, 72, 153, 0.4);">+ Add Tenant Template</button>
+          <button class="btn btn-secondary btn-sm" onclick="copyConfigToClipboard()">📋 Copy</button>
+          <button class="btn btn-secondary btn-sm" onclick="reloadConfigFromStore()">🔄 Reload from Disk</button>
+          <button class="btn btn-secondary btn-sm" onclick="validateConfigCandidate()">🔍 Validate</button>
+          <button class="btn btn-sm" onclick="saveAndHotReloadConfig()">💾 Save &amp; Hot Reload</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1308,6 +1402,11 @@
       const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
 
       if (e.key === 'Escape') {
+        const configModal = document.getElementById('config-modal');
+        if (configModal && configModal.style.display === 'flex') {
+          closeConfigModal();
+          return;
+        }
         const modal = document.getElementById('shortcutsModal');
         if (modal && modal.style.display === 'block') {
           toggleShortcutsModal(false);
@@ -1363,6 +1462,7 @@
       if (e.key === '3') { switchTab('fluxcells'); return; }
       if (e.key === '4') { switchTab('checkpoints'); return; }
       if (e.key === '5') { switchTab('config'); return; }
+      if (e.key === 'c' || e.key === 'C') { e.preventDefault(); openConfigModal(); return; }
       if (e.key === 'u' || e.key === 'U') { e.preventDefault(); switchTab('fluxcells'); openDevUploadModal(); return; }
 
       if (currentTab === 'traces' && currentFilteredTraces.length > 0) {
@@ -1654,6 +1754,62 @@
                 cfgMailerExtraRow.style.display = 'block';
               } else {
                 cfgMailerExtraRow.style.display = 'none';
+              }
+            }
+
+            // Multi-Tenant Outbound Mailer Profiles
+            const tenantsTbody = document.getElementById('tenantsTableBody');
+            const tenantsBadge = document.getElementById('tenantsCountBadge');
+            const tenantsMap = (m && m.tenants) || {};
+            const tenantEntries = Object.entries(tenantsMap);
+
+            if (tenantsBadge) {
+              tenantsBadge.textContent = `${tenantEntries.length} ${tenantEntries.length === 1 ? 'Tenant' : 'Tenants'}`;
+              tenantsBadge.className = tenantEntries.length > 0 ? 'badge badge-purple' : 'badge badge-info';
+            }
+
+            if (tenantsTbody) {
+              if (tenantEntries.length === 0) {
+                tenantsTbody.innerHTML = '<tr><td colspan="6" style="color: var(--text-muted); padding: 1.25rem; text-align: center;">No multi-tenant mailer profiles defined (downstream events fall back to chassis default mailer)</td></tr>';
+              } else {
+                tenantsTbody.innerHTML = tenantEntries.map(([tName, tCfg]) => {
+                  const prov = (tCfg.provider || 'console').toLowerCase();
+                  let provBadge = '<span class="badge badge-info">' + escapeHtml(prov.toUpperCase()) + '</span>';
+                  if (prov === 'console') provBadge = `<span class="badge ${tCfg.isProduction ? 'badge-error' : 'badge-warn'}">Console</span>`;
+                  else if (prov === 'mailtrap') provBadge = '<span class="badge badge-info">Mailtrap</span>';
+                  else if (prov === 'resend') provBadge = '<span class="badge badge-ok">Resend</span>';
+                  else if (prov === 'postmark') provBadge = '<span class="badge badge-ok">Postmark</span>';
+                  else if (prov === 'sendgrid') provBadge = '<span class="badge badge-ok">SendGrid</span>';
+                  else if (prov === 'smtp') provBadge = '<span class="badge badge-purple">Universal SMTP</span>';
+
+                  let authBadge = '<span class="badge badge-info">Chassis Key</span>';
+                  if (tCfg.apiKeyConfigured) {
+                    authBadge = tCfg.apiKeyMasked ? `<span class="badge badge-ok">Active (${escapeHtml(tCfg.apiKeyMasked)})</span>` : '<span class="badge badge-ok">Configured</span>';
+                  } else if (prov === 'console') {
+                    authBadge = '<span class="badge badge-warn">Dev / None</span>';
+                  }
+
+                  const brandingHtml = `
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                      ${tCfg.accentColor ? `<span style="display:inline-block; width:12px; height:12px; border-radius:50%; background:${escapeHtml(tCfg.accentColor)}; border:1px solid #ffffff44;" title="${escapeHtml(tCfg.accentColor)}"></span>` : ''}
+                      <strong style="color: var(--text);">${escapeHtml(tCfg.appName || tName)}</strong>
+                      ${tCfg.logoUrlConfigured ? '<span class="badge badge-info" style="font-size:0.65rem;" title="Custom Logo Configured">Logo</span>' : ''}
+                    </div>
+                  `;
+
+                  const fromAddr = tCfg.fromFormatted || (tCfg.fromEmail ? `${tCfg.fromName || tName} <${tCfg.fromEmail}>` : '-');
+
+                  return `<tr>
+                    <td style="font-weight: 700; color: #ec4899; white-space: nowrap;">
+                      <code style="color: #ec4899; font-size: 0.9rem;">${escapeHtml(tName)}</code>
+                    </td>
+                    <td>${provBadge}</td>
+                    <td><code style="font-size: 0.8rem;">${escapeHtml(fromAddr)}</code></td>
+                    <td>${brandingHtml}</td>
+                    <td>${authBadge}</td>
+                    <td><code style="font-size: 0.8rem;">${escapeHtml(tCfg.baseUrl || '-')}</code></td>
+                  </tr>`;
+                }).join('');
               }
             }
 
@@ -2223,6 +2379,367 @@
         <td><span class="badge badge-running">Memoized</span></td>
         <td><code>chk:${cmdId}:*</code> (Active in host storage)</td>
       </tr>`;
+    }
+
+    // =========================================================================
+    // Admin Control Plane: Dynamic Configuration & Modal Management
+    // =========================================================================
+    function getAdminToken() {
+      return localStorage.getItem('flux_admin_token') || sessionStorage.getItem('flux_admin_token') || '';
+    }
+
+    function isTokenInLocalStorage() {
+      return localStorage.getItem('flux_admin_token') !== null;
+    }
+
+    function setAdminToken(token, useLocal = true) {
+      const clean = (token || '').trim();
+      if (useLocal) {
+        if (clean) {
+          localStorage.setItem('flux_admin_token', clean);
+        } else {
+          localStorage.removeItem('flux_admin_token');
+        }
+        sessionStorage.removeItem('flux_admin_token');
+      } else {
+        if (clean) {
+          sessionStorage.setItem('flux_admin_token', clean);
+        } else {
+          sessionStorage.removeItem('flux_admin_token');
+        }
+        localStorage.removeItem('flux_admin_token');
+      }
+    }
+
+    function getAuthHeaders(customHeaders = {}) {
+      const headers = Object.assign({}, customHeaders);
+      const token = getAdminToken();
+      if (token) {
+        headers['Authorization'] = 'Bearer ' + token;
+        headers['x-flux-admin-token'] = token;
+      }
+      return headers;
+    }
+
+    let originalConfigContent = null;
+    let isConfigMaximized = false;
+
+    function isConfigDirty() {
+      const textarea = document.getElementById('config-editor-textarea');
+      if (!textarea || originalConfigContent === null) return false;
+      return textarea.value !== originalConfigContent;
+    }
+
+    function toggleConfigMaximize() {
+      const d = document.getElementById('config-modal-dialog');
+      const btn = document.getElementById('config-maximize-btn');
+      if (!d) return;
+      isConfigMaximized = !isConfigMaximized;
+      if (isConfigMaximized) {
+        d.style.width = '100vw';
+        d.style.height = '100vh';
+        d.style.maxWidth = '100vw';
+        d.style.maxHeight = '100vh';
+        d.style.borderRadius = '0';
+        d.style.border = 'none';
+        if (btn) {
+          btn.innerText = '🗗';
+          btn.title = 'Restore Window Size';
+        }
+      } else {
+        d.style.width = '96vw';
+        d.style.height = '92vh';
+        d.style.maxWidth = '1400px';
+        d.style.maxHeight = '94vh';
+        d.style.borderRadius = '10px';
+        d.style.border = '1px solid #30363d';
+        if (btn) {
+          btn.innerText = '⛶';
+          btn.title = 'Maximize Window';
+        }
+      }
+    }
+
+    function openConfigModal() {
+      const m = document.getElementById('config-modal');
+      if (!m) return;
+      initEditorKeybindings();
+      const tokenInput = document.getElementById('config-auth-token');
+      if (tokenInput) {
+        tokenInput.value = getAdminToken();
+      }
+      m.style.display = 'flex';
+      loadConfigData();
+    }
+
+    function closeConfigModal(force = false) {
+      if (!force && isConfigDirty()) {
+        if (!confirm('You have unsaved changes in the configuration editor.\n\nAre you sure you want to close and discard your changes?')) {
+          return false;
+        }
+      }
+      const m = document.getElementById('config-modal');
+      if (m) m.style.display = 'none';
+      return true;
+    }
+
+    function toggleConfigModal() {
+      const m = document.getElementById('config-modal');
+      if (!m) return;
+      if (m.style.display === 'flex') closeConfigModal();
+      else openConfigModal();
+    }
+
+    function showConfigBanner(isSuccess, message, details = '') {
+      const banner = document.getElementById('config-alert-banner');
+      if (!banner) return;
+      banner.style.display = 'block';
+      if (isSuccess) {
+        banner.style.background = 'rgba(63, 185, 80, 0.15)';
+        banner.style.borderColor = 'var(--success)';
+        banner.style.color = '#3fb950';
+      } else {
+        banner.style.background = 'rgba(248, 81, 73, 0.15)';
+        banner.style.borderColor = 'var(--error)';
+        banner.style.color = 'var(--error)';
+      }
+      banner.innerHTML = `<div><strong>${isSuccess ? '✅ Success' : '❌ Validation Error'}:</strong> ${escapeHtml(message)}</div>` +
+        (details ? `<div style="margin-top: 4px; font-size: 11.5px; opacity: 0.9;">${details}</div>` : '');
+    }
+
+    async function loadConfigData() {
+      const banner = document.getElementById('config-alert-banner');
+      if (banner) banner.style.display = 'none';
+      try {
+        const res = await fetch('/admin/api/v1/config', { headers: getAuthHeaders() });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data) return;
+
+        const badge = document.getElementById('config-backend-badge');
+        if (badge) {
+          badge.innerText = (data.backend || 'DISK').toUpperCase();
+        }
+
+        const descEl = document.getElementById('config-descriptor');
+        if (descEl) descEl.innerText = data.descriptor || data.sourcePath || 'spectra-flux.toml';
+
+        const verEl = document.getElementById('config-version');
+        if (verEl) verEl.innerText = '#' + (data.version || 1);
+
+        const hashEl = document.getElementById('config-hash');
+        if (hashEl) hashEl.innerText = data.hash ? data.hash.substring(0, 12) + '...' : '--';
+
+        const textarea = document.getElementById('config-editor-textarea');
+        if (textarea && data.content !== undefined) {
+          textarea.value = data.content;
+          originalConfigContent = data.content;
+        }
+      } catch (err) {
+        console.error('loadConfigData failed:', err);
+      }
+    }
+
+    async function validateConfigCandidate() {
+      const textarea = document.getElementById('config-editor-textarea');
+      if (!textarea) return;
+      const content = textarea.value;
+      try {
+        const res = await fetch('/admin/api/v1/config/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content })
+        });
+        const data = await res.json();
+        if (data.valid) {
+          let summaryDetails = '';
+          if (data.summary) {
+            summaryDetails = `Host: ${data.summary.host}:${data.summary.port} | Broker: ${data.summary.broker_method} | Fluxcells: ${data.summary.fluxcells_count} | Profiles: ${data.summary.profiles_count} | Mailer: ${data.summary.mailer_provider} (${data.summary.mailer_tenants_count} tenants: ${(data.summary.mailer_tenant_names || []).join(', ') || 'none'})`;
+          }
+          if (data.warnings && data.warnings.length > 0) {
+            summaryDetails += `<br><span style="color: var(--warning);">⚠️ ${escapeHtml(data.warnings.join(', '))}</span>`;
+          }
+          showConfigBanner(true, 'Configuration syntax validated successfully.', summaryDetails);
+        } else {
+          showConfigBanner(false, 'Configuration failed validation.', data.errors ? data.errors.map(e => escapeHtml(e)).join('<br>') : 'Syntax error');
+        }
+      } catch (e) {
+        showConfigBanner(false, 'Validation request failed: ' + e.message);
+      }
+    }
+
+    async function saveAndHotReloadConfig() {
+      const textarea = document.getElementById('config-editor-textarea');
+      if (!textarea) return;
+      const content = textarea.value;
+      const token = document.getElementById('config-auth-token')?.value?.trim();
+      if (token && token !== getAdminToken()) {
+        setAdminToken(token, isTokenInLocalStorage());
+      }
+
+      const headers = getAuthHeaders({ 'Content-Type': 'application/json' });
+
+      try {
+        const res = await fetch('/admin/api/v1/config', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ content, reload: true })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showConfigBanner(true, `Revision #${data.version} saved to disk volume and hot-reloaded into runtime!`, `SHA: ${data.hash}`);
+          const verEl = document.getElementById('config-version');
+          if (verEl) verEl.innerText = '#' + data.version;
+          const hashEl = document.getElementById('config-hash');
+          if (hashEl) hashEl.innerText = data.hash ? data.hash.substring(0, 12) + '...' : '--';
+          originalConfigContent = content;
+          fetchData();
+        } else {
+          showConfigBanner(false, data.message || data.error || (res.status === 401 ? 'Unauthorized: Valid FLUX_ADMIN_TOKEN required' : 'Failed to save configuration'));
+        }
+      } catch (e) {
+        showConfigBanner(false, 'Save request failed: ' + e.message);
+      }
+    }
+
+    async function reloadConfigFromStore() {
+      const token = document.getElementById('config-auth-token')?.value?.trim();
+      if (token && token !== getAdminToken()) {
+        setAdminToken(token, isTokenInLocalStorage());
+      }
+      try {
+        const res = await fetch('/admin/api/v1/config/reload', {
+          method: 'POST',
+          headers: getAuthHeaders()
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showConfigBanner(true, `Hot-reloaded revision #${data.version} from disk store!`, `SHA: ${data.hash}`);
+          loadConfigData();
+          fetchData();
+        } else {
+          showConfigBanner(false, data.message || data.error || (res.status === 401 ? 'Unauthorized: Valid FLUX_ADMIN_TOKEN required' : 'Reload failed'));
+        }
+      } catch (e) {
+        showConfigBanner(false, 'Reload request failed: ' + e.message);
+      }
+    }
+
+    function copyConfigToClipboard() {
+      const textarea = document.getElementById('config-editor-textarea');
+      if (!textarea) return;
+      navigator.clipboard.writeText(textarea.value).then(() => {
+        showConfigBanner(true, 'Configuration copied to clipboard.');
+      }).catch(err => {
+        showConfigBanner(false, 'Failed to copy to clipboard: ' + err.message);
+      });
+    }
+
+    function insertTenantSnippet() {
+      const textarea = document.getElementById('config-editor-textarea');
+      if (!textarea) return;
+      const snippet = `
+[mailer.tenants.my_tenant]
+provider = "resend"
+api_key = "re_example_secret_token"
+from_email = "auth@mytenant.example"
+from_name = "My Tenant App"
+app_name = "My Tenant"
+base_url = "https://mytenant.example"
+accent_color = "#38bdf8"
+`;
+      const val = textarea.value;
+      if (!val.includes('[mailer.tenants.my_tenant]')) {
+        textarea.value = val.trimEnd() + '\n' + snippet;
+        textarea.scrollTop = textarea.scrollHeight;
+      }
+      showConfigBanner(true, 'Tenant profile snippet appended. Customize tenant name, provider, and credentials, then click Save & Hot-Reload.');
+    }
+
+    function openConfigModalWithTenantSnippet() {
+      openConfigModal();
+      setTimeout(() => {
+        insertTenantSnippet();
+      }, 300);
+    }
+
+    function initEditorKeybindings() {
+      const textarea = document.getElementById('config-editor-textarea');
+      if (!textarea || textarea.dataset.shortcutsBound) return;
+      textarea.dataset.shortcutsBound = 'true';
+
+      textarea.addEventListener('keydown', (e) => {
+        // 1. Toggle Comment: Cmd+/ (Mac) or Ctrl+/ (Win/Linux)
+        if ((e.metaKey || e.ctrlKey) && (e.key === '/' || e.code === 'Slash')) {
+          e.preventDefault();
+          const val = textarea.value;
+          const selStart = textarea.selectionStart;
+          const selEnd = textarea.selectionEnd;
+
+          const lineStart = val.lastIndexOf('\n', selStart - 1) + 1;
+          let lineEnd = val.indexOf('\n', selEnd);
+          if (lineEnd === -1) lineEnd = val.length;
+          if (selEnd > selStart && val[selEnd - 1] === '\n') {
+            lineEnd = selEnd - 1;
+          }
+
+          const selectedBlock = val.substring(lineStart, lineEnd);
+          const lines = selectedBlock.split('\n');
+
+          const nonEmpties = lines.filter(l => l.trim().length > 0);
+          const allCommented = nonEmpties.length > 0 && nonEmpties.every(l => /^\s*#/.test(l));
+
+          let transformed;
+          if (allCommented) {
+            transformed = lines.map(l => l.replace(/^(\s*)#\s?/, '$1'));
+          } else {
+            transformed = lines.map(l => {
+              if (l.trim().length === 0 && lines.length > 1) return l;
+              return l.replace(/^(\s*)(.*)$/, '$1# $2');
+            });
+          }
+
+          const newBlock = transformed.join('\n');
+          textarea.setRangeText(newBlock, lineStart, lineEnd, 'select');
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          return;
+        }
+
+        // 2. Tab / Shift+Tab Indentation
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          const val = textarea.value;
+          const selStart = textarea.selectionStart;
+          const selEnd = textarea.selectionEnd;
+
+          if (!e.shiftKey && selStart === selEnd) {
+            textarea.setRangeText('  ', selStart, selEnd, 'end');
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          } else {
+            const lineStart = val.lastIndexOf('\n', selStart - 1) + 1;
+            let lineEnd = val.indexOf('\n', selEnd);
+            if (lineEnd === -1) lineEnd = val.length;
+            if (selEnd > selStart && val[selEnd - 1] === '\n') {
+              lineEnd = selEnd - 1;
+            }
+
+            const lines = val.substring(lineStart, lineEnd).split('\n');
+            const transformed = e.shiftKey
+              ? lines.map(l => l.replace(/^ {1,2}/, ''))
+              : lines.map(l => '  ' + l);
+
+            const newBlock = transformed.join('\n');
+            textarea.setRangeText(newBlock, lineStart, lineEnd, 'select');
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        }
+
+        // 3. Cmd+S or Ctrl+S to save & hot-reload
+        if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.code === 'KeyS')) {
+          e.preventDefault();
+          saveAndHotReloadConfig();
+        }
+      });
     }
 
     function escapeHtml(s) {
