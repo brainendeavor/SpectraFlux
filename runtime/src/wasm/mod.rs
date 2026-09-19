@@ -836,11 +836,11 @@ impl WasmHost {
 
         match fluxcell_name {
             "magic_link" | "magic-link" => {
-                if clean_path == "/verify" {
+                if clean_path == "/verify" || clean_path == "/auth/verify" {
                     let mut token_opt = None;
                     for param in query_str.split('&') {
                         if let Some((k, v)) = param.split_once('=') {
-                            if k == "token" {
+                            if k == "token" || k == "code" {
                                 token_opt = Some(v.to_string());
                                 break;
                             }
@@ -848,13 +848,17 @@ impl WasmHost {
                     }
                     if token_opt.is_none() && !body.is_empty() {
                         if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&body) {
-                            token_opt = val.get("token").and_then(|t| t.as_str()).map(|s| s.to_string());
+                            token_opt = val.get("token")
+                                .or_else(|| val.get("code"))
+                                .and_then(|t| t.as_str())
+                                .map(|s| s.to_string());
                         }
                     }
 
                     if let Some(token) = token_opt {
+                        let clean_token = token.trim().replace(['-', ' '], "");
                         if let Some(storage) = &self.storage {
-                            let key = format!("magic_token:{}", token);
+                            let key = format!("magic_token:{}", clean_token);
                             if let Ok(Some(email)) = storage.get_del(&key).await {
                                 let session_id = uuid::Uuid::now_v7().to_string();
                                 let resp = serde_json::json!({

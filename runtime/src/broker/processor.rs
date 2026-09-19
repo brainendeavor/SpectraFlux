@@ -417,40 +417,100 @@ impl EventProcessor {
         if msg.topic.ends_with("requestmagiclink") || msg.topic == "auth.magic_link" {
             let step_start = std::time::Instant::now();
             let step_start_iso = chrono::Utc::now().to_rfc3339();
-            let email = if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
+
+            let payload_val: Option<serde_json::Value> = serde_json::from_slice(&msg.payload).ok();
+            let payload_ref = payload_val.as_ref();
+
+            let email = payload_ref.and_then(|val| {
                 val.pointer("/request/gql/jsonBody/variables/email")
                     .or_else(|| val.pointer("/variables/email"))
                     .or_else(|| val.pointer("/email"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
-                    .unwrap_or_else(|| "user@example.com".to_string())
-            } else {
-                "user@example.com".to_string()
-            };
+            }).unwrap_or_else(|| "user@example.com".to_string());
+
+            let app_name_override = payload_ref.and_then(|val| {
+                val.pointer("/request/gql/jsonBody/variables/appName")
+                    .or_else(|| val.pointer("/variables/appName"))
+                    .or_else(|| val.pointer("/branding/appName"))
+                    .or_else(|| val.pointer("/appName"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            });
+
+            let logo_url_override = payload_ref.and_then(|val| {
+                val.pointer("/request/gql/jsonBody/variables/logoUrl")
+                    .or_else(|| val.pointer("/variables/logoUrl"))
+                    .or_else(|| val.pointer("/branding/logoUrl"))
+                    .or_else(|| val.pointer("/logoUrl"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            });
+
+            let accent_color_override = payload_ref.and_then(|val| {
+                val.pointer("/request/gql/jsonBody/variables/accentColor")
+                    .or_else(|| val.pointer("/variables/accentColor"))
+                    .or_else(|| val.pointer("/branding/accentColor"))
+                    .or_else(|| val.pointer("/accentColor"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            });
+
             let token = fluxcell_magic_link::mint_magic_token(&email);
+            let code = fluxcell_magic_link::mint_magic_code();
+
             let kv_start = std::time::Instant::now();
-            let kv_res = self
+            let kv_res_token = self
                 .storage
                 .set(&format!("magic_token:{}", token), &email, 900)
                 .await;
+            let kv_res_code = self
+                .storage
+                .set(&format!("magic_token:{}", code), &email, 900)
+                .await;
             let kv_duration_us = kv_start.elapsed().as_micros() as u64;
 
-            let host_calls = vec![HostCallSpan {
-                call_type: "kv:set".to_string(),
-                target: format!("magic_token:{}", token),
-                duration_us: kv_duration_us,
-                status: if kv_res.is_ok() {
-                    "ok".to_string()
-                } else {
-                    "error".to_string()
+            let host_calls = vec![
+                HostCallSpan {
+                    call_type: "kv:set".to_string(),
+                    target: format!("magic_token:{}", token),
+                    duration_us: kv_duration_us / 2,
+                    status: if kv_res_token.is_ok() {
+                        "ok".to_string()
+                    } else {
+                        "error".to_string()
+                    },
+                    detail: Some(format!("ttl: 900s, email: {}", email)),
                 },
-                detail: Some(format!("ttl: 900s, email: {}", email)),
-            }];
+                HostCallSpan {
+                    call_type: "kv:set".to_string(),
+                    target: format!("magic_token:{}", code),
+                    duration_us: kv_duration_us / 2,
+                    status: if kv_res_code.is_ok() {
+                        "ok".to_string()
+                    } else {
+                        "error".to_string()
+                    },
+                    detail: Some(format!("ttl: 900s, otp_code: {}", code)),
+                },
+            ];
 
-            // Dispatch transactional email via configured provider (Mailtrap, Resend, Postmark, SendGrid, SMTP, or Console)
+            // Resolve dynamic email branding (payload override > 12-factor mailer_cfg defaults)
             let mailer_cfg = crate::mailer::MailerConfig::from_env();
+            let branding = fluxcell_magic_link::EmailBranding {
+                app_name: app_name_override.unwrap_or_else(|| mailer_cfg.app_name.clone()),
+                logo_url: logo_url_override.or_else(|| mailer_cfg.logo_url.clone()),
+                accent_color: accent_color_override.or_else(|| mailer_cfg.accent_color.clone()),
+                support_email: None,
+            };
+
             let verify_url = format!("{}/auth/verify?token={}", mailer_cfg.base_url, token);
-            let rendered = fluxcell_magic_link::render_email_templates(&email, &verify_url);
+            let rendered = fluxcell_magic_link::render_email_templates_branded(
+                &email,
+                &verify_url,
+                Some(&code),
+                Some(&branding),
+            );
             let mail_res = crate::mailer::send_transactional_email(
                 &mailer_cfg,
                 &email,
@@ -469,8 +529,18 @@ impl EventProcessor {
                 start_time: step_start_iso,
                 duration_ms: step_duration_ms,
                 status: if mail_err.is_none() { "ok".to_string() } else { "email_dispatch_error".to_string() },
-                input_preview: Some(serde_json::json!({ "email": email, "provider": format!("{:?}", mailer_cfg.provider) })),
-                output_preview: Some(serde_json::json!({ "status": "minted", "token": token, "verify_url": verify_url })),
+                input_preview: Some(serde_json::json!({
+                    "email": email,
+                    "appName": branding.app_name,
+                    "provider": format!("{:?}", mailer_cfg.provider)
+                })),
+                output_preview: Some(serde_json::json!({
+                    "status": "minted",
+                    "token": token,
+                    "code": code,
+                    "appName": branding.app_name,
+                    "verify_url": verify_url
+                })),
                 error: mail_err.clone(),
                 host_calls,
             });

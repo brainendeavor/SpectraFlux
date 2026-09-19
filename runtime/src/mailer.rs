@@ -36,6 +36,9 @@ pub struct MailerConfig {
     pub api_key: Option<String>,
     pub from_email: String,
     pub from_name: String,
+    pub app_name: String,
+    pub logo_url: Option<String>,
+    pub accent_color: Option<String>,
     pub base_url: String,
     pub mailtrap_inbox_id: Option<String>,
     pub smtp_host: Option<String>,
@@ -85,9 +88,21 @@ impl MailerConfig {
             .or_else(|_| env::var("EMAIL_FROM"))
             .unwrap_or_else(|_| "noreply@example.com".to_string());
 
+        let app_name = env::var("FLUX__MAILER__APP_NAME")
+            .or_else(|_| env::var("APP_NAME"))
+            .unwrap_or_else(|_| "Auth Service".to_string());
+
         let from_name = env::var("FLUX__MAILER__FROM_NAME")
             .or_else(|_| env::var("EMAIL_FROM_NAME"))
-            .unwrap_or_else(|_| "Auth Service".to_string());
+            .unwrap_or_else(|_| app_name.clone());
+
+        let logo_url = env::var("FLUX__MAILER__LOGO_URL")
+            .or_else(|_| env::var("APP_LOGO_URL"))
+            .ok();
+
+        let accent_color = env::var("FLUX__MAILER__ACCENT_COLOR")
+            .or_else(|_| env::var("APP_ACCENT_COLOR"))
+            .ok();
 
         let base_url = env::var("FLUX__MAILER__BASE_URL")
             .or_else(|_| env::var("APP_BASE_URL"))
@@ -108,7 +123,7 @@ impl MailerConfig {
         let smtp_port = env::var("FLUX__MAILER__SMTP_PORT")
             .or_else(|_| env::var("SMTP_PORT"))
             .ok()
-            .and_then(|p| p.parse().ok());
+            .and_then(|p| p.parse::<u16>().ok());
 
         let smtp_user = env::var("FLUX__MAILER__SMTP_USER")
             .or_else(|_| env::var("SMTP_USER"))
@@ -128,6 +143,9 @@ impl MailerConfig {
             api_key,
             from_email,
             from_name,
+            app_name,
+            logo_url,
+            accent_color,
             base_url,
             mailtrap_inbox_id,
             smtp_host,
@@ -167,6 +185,8 @@ impl MailerConfig {
             "fromEmail": self.from_email,
             "fromName": self.from_name,
             "fromFormatted": format!("{} <{}>", self.from_name, self.from_email),
+            "appName": self.app_name,
+            "logoUrlConfigured": self.logo_url.is_some(),
             "baseUrl": self.base_url,
             "apiKeyConfigured": self.api_key.is_some(),
             "apiKeyMasked": masked_api_key,
@@ -470,6 +490,9 @@ mod tests {
             api_key: None,
             from_email: "auth@example.com".to_string(),
             from_name: "Example Auth".to_string(),
+            app_name: "Example App".to_string(),
+            logo_url: None,
+            accent_color: None,
             base_url: "http://localhost:8000".to_string(),
             mailtrap_inbox_id: None,
             smtp_host: None,
@@ -488,6 +511,9 @@ mod tests {
             api_key: None,
             from_email: "noreply@example.com".to_string(),
             from_name: "Auth Service".to_string(),
+            app_name: "Auth Service".to_string(),
+            logo_url: None,
+            accent_color: None,
             base_url: "http://localhost:8000".to_string(),
             mailtrap_inbox_id: None,
             smtp_host: None,
@@ -516,6 +542,9 @@ mod tests {
             api_key: Some("re_1234567890abcdef".to_string()),
             from_email: "noreply@example.com".to_string(),
             from_name: "App Auth".to_string(),
+            app_name: "App Auth".to_string(),
+            logo_url: Some("https://example.com/logo.png".to_string()),
+            accent_color: Some("#ec4899".to_string()),
             base_url: "https://example.com".to_string(),
             mailtrap_inbox_id: None,
             smtp_host: None,
@@ -528,6 +557,8 @@ mod tests {
         let json = cfg.to_sanitized_json();
         assert_eq!(json["provider"], "resend");
         assert_eq!(json["fromFormatted"], "App Auth <noreply@example.com>");
+        assert_eq!(json["appName"], "App Auth");
+        assert_eq!(json["logoUrlConfigured"], true);
         assert_eq!(json["apiKeyConfigured"], true);
         assert_eq!(json["apiKeyMasked"], "re_1••••cdef");
         // Ensure raw API key is NEVER exposed in the JSON
