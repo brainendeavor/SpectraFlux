@@ -159,7 +159,8 @@ struct RegisteredFluxcell {
 
 struct HostState {
     limits: StoreLimits,
-    storage: Option<Arc<dyn crate::storage::FluxStorage>>,
+    internal_storage: Option<Arc<dyn crate::storage::FluxStorage>>,
+    fluxcell_storage: Option<Arc<dyn crate::storage::FluxStorage>>,
     db_registry: Option<Arc<crate::db::DatabaseRegistry>>,
     broker: Option<Arc<dyn crate::broker::BrokerConsumerAdapter>>,
     active_transactions: HashMap<u64, Box<dyn crate::db::FluxTx>>,
@@ -175,7 +176,9 @@ pub struct WasmHost {
     ticker_running: Arc<AtomicBool>,
     fluxcells: Arc<RwLock<HashMap<String, Arc<RegisteredFluxcell>>>>,
     #[allow(dead_code)]
-    storage: Option<Arc<dyn crate::storage::FluxStorage>>,
+    internal_storage: Option<Arc<dyn crate::storage::FluxStorage>>,
+    #[allow(dead_code)]
+    fluxcell_storage: Option<Arc<dyn crate::storage::FluxStorage>>,
     db_registry: Option<Arc<crate::db::DatabaseRegistry>>,
     broker: Option<Arc<dyn crate::broker::BrokerConsumerAdapter>>,
 }
@@ -193,12 +196,22 @@ impl WasmHost {
         storage: Option<Arc<dyn crate::storage::FluxStorage>>,
         db_registry: Option<Arc<crate::db::DatabaseRegistry>>,
     ) -> Result<Self> {
-        Self::with_capabilities(epoch_tick_interval_ms, storage, db_registry, None)
+        Self::with_dual_storage(epoch_tick_interval_ms, storage.clone(), storage, db_registry)
+    }
+
+    pub fn with_dual_storage(
+        epoch_tick_interval_ms: u64,
+        internal_storage: Option<Arc<dyn crate::storage::FluxStorage>>,
+        fluxcell_storage: Option<Arc<dyn crate::storage::FluxStorage>>,
+        db_registry: Option<Arc<crate::db::DatabaseRegistry>>,
+    ) -> Result<Self> {
+        Self::with_capabilities(epoch_tick_interval_ms, internal_storage, fluxcell_storage, db_registry, None)
     }
 
     pub fn with_capabilities(
         epoch_tick_interval_ms: u64,
-        storage: Option<Arc<dyn crate::storage::FluxStorage>>,
+        internal_storage: Option<Arc<dyn crate::storage::FluxStorage>>,
+        fluxcell_storage: Option<Arc<dyn crate::storage::FluxStorage>>,
         db_registry: Option<Arc<crate::db::DatabaseRegistry>>,
         broker: Option<Arc<dyn crate::broker::BrokerConsumerAdapter>>,
     ) -> Result<Self> {
@@ -230,10 +243,19 @@ impl WasmHost {
             epoch_tick_interval_ms,
             ticker_running,
             fluxcells: Arc::new(RwLock::new(HashMap::new())),
-            storage,
+            internal_storage,
+            fluxcell_storage,
             db_registry,
             broker,
         })
+    }
+
+    pub fn internal_storage(&self) -> Option<Arc<dyn crate::storage::FluxStorage>> {
+        self.internal_storage.clone()
+    }
+
+    pub fn fluxcell_storage(&self) -> Option<Arc<dyn crate::storage::FluxStorage>> {
+        self.fluxcell_storage.clone()
     }
 
     pub fn with_broker(mut self, broker: Option<Arc<dyn crate::broker::BrokerConsumerAdapter>>) -> Self {
@@ -311,7 +333,8 @@ impl WasmHost {
             .build();
         let host_state = HostState {
             limits,
-            storage: self.storage.clone(),
+            internal_storage: self.internal_storage.clone(),
+            fluxcell_storage: self.fluxcell_storage.clone(),
             db_registry: self.db_registry.clone(),
             broker: self.broker.clone(),
             active_transactions: HashMap::new(),
@@ -676,7 +699,8 @@ impl WasmHost {
                         .build();
                     let host_state = HostState {
                         limits,
-                        storage: self.storage.clone(),
+                        internal_storage: self.internal_storage.clone(),
+                        fluxcell_storage: self.fluxcell_storage.clone(),
                         db_registry: self.db_registry.clone(),
                         broker: self.broker.clone(),
                         active_transactions: HashMap::new(),
@@ -715,7 +739,8 @@ impl WasmHost {
             .and_then(|v| v.as_str())
             .map(ToString::to_string);
         store.data_mut().current_command_id = cmd_id;
-        store.data_mut().storage = self.storage.clone();
+        store.data_mut().internal_storage = self.internal_storage.clone();
+        store.data_mut().fluxcell_storage = self.fluxcell_storage.clone();
         store.data_mut().active_host_spans.clear();
 
         // Reset epoch timeout ticks for this invocation
@@ -857,14 +882,33 @@ impl WasmHost {
 
                     if let Some(token) = token_opt {
                         let clean_token = token.trim().replace(['-', ' '], "");
-                        if let Some(storage) = &self.storage {
+                        if let Some(storage) = &self.internal_storage {
                             let key = format!("magic_token:{}", clean_token);
                             if let Ok(Some(email)) = storage.get_del(&key).await {
+                                static JWT_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+                                let jwt_secret = JWT_SECRET.get_or_init(|| {
+                                    std::env::var("SPECTRA_JWT_SECRET")
+                                        .unwrap_or_else(|_| "spectra_secret_key_default".to_string())
+                                });
                                 let session_id = uuid::Uuid::now_v7().to_string();
+                                let token_jwt = fluxcell_magic_link::mint_auth_jwt_hs256(
+                                    &email,
+                                    &email,
+                                    &["viewer"],
+                                    None,
+                                    jwt_secret.as_bytes(),
+                                    86400,
+                                );
+                                // Preload Kevy storage cache for L2 lookups
+                                let _ = storage.set(&format!("auth:session:{}:roles", session_id), r#"["viewer"]"#, 86400).await;
+                                let _ = storage.set(&format!("auth:user:{}:roles", email), r#"["viewer"]"#, 86400).await;
+
                                 let resp = serde_json::json!({
                                     "status": "VERIFIED",
                                     "email": email,
                                     "session_id": session_id,
+                                    "roles": ["viewer"],
+                                    "token": token_jwt,
                                 });
                                 let resp_bytes = serde_json::to_vec(&resp).unwrap();
                                 let headers = vec![("content-type".to_string(), "application/json".to_string())];
@@ -880,6 +924,19 @@ impl WasmHost {
                     let resp_bytes = serde_json::to_vec(&err_resp).unwrap();
                     let headers = vec![("content-type".to_string(), "application/json".to_string())];
                     return Ok((401, headers, resp_bytes));
+                } else if clean_path == "/.well-known/jwks.json" || clean_path == "/auth/.well-known/jwks.json" {
+                    let jwks = serde_json::json!({
+                        "keys": []
+                    });
+                    let resp_bytes = serde_json::to_vec(&jwks).unwrap();
+                    let headers = vec![("content-type".to_string(), "application/json".to_string())];
+                    return Ok((200, headers, resp_bytes));
+                } else if clean_path == "/.well-known/openid-configuration" || clean_path == "/auth/.well-known/openid-configuration" {
+                    let base_url = std::env::var("FLUX__BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
+                    let oidc_cfg = fluxcell_magic_link::get_openid_configuration(&base_url);
+                    let resp_bytes = serde_json::to_vec(&oidc_cfg).unwrap();
+                    let headers = vec![("content-type".to_string(), "application/json".to_string())];
+                    return Ok((200, headers, resp_bytes));
                 } else if clean_path == "/status" {
                     let routes_json: Vec<serde_json::Value> = fluxcell_magic_link::get_routes()
                         .into_iter()
@@ -995,6 +1052,7 @@ impl WasmHost {
         self.bind_host_db(&mut linker)?;
         self.bind_host_checkpoint(&mut linker)?;
         self.bind_host_kv(&mut linker)?;
+        self.bind_host_redis(&mut linker)?;
         self.bind_host_broker(&mut linker)?;
         Ok(linker)
     }
@@ -1248,9 +1306,9 @@ impl WasmHost {
                         let step_name = read_string_from_caller(&mut caller, step_ptr, step_len)?;
                         let storage = caller
                             .data()
-                            .storage
+                            .internal_storage
                             .clone()
-                            .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
+                            .ok_or_else(|| anyhow!("No internal storage configured on this chassis"))?;
                         let cmd_id = caller
                             .data()
                             .current_command_id
@@ -1305,9 +1363,9 @@ impl WasmHost {
                         let val_json = read_string_from_caller(&mut caller, val_ptr, val_len)?;
                         let storage = caller
                             .data()
-                            .storage
+                            .internal_storage
                             .clone()
-                            .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
+                            .ok_or_else(|| anyhow!("No internal storage configured on this chassis"))?;
                         let cmd_id = caller
                             .data()
                             .current_command_id
@@ -1357,9 +1415,9 @@ impl WasmHost {
                         let key = read_string_from_caller(&mut caller, key_ptr, key_len)?;
                         let storage = caller
                             .data()
-                            .storage
+                            .fluxcell_storage
                             .clone()
-                            .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
+                            .ok_or_else(|| anyhow!("No fluxcell storage configured on this chassis"))?;
                         let val = run_async(storage.get(&key))?;
                         Ok((key, val))
                     })() {
@@ -1406,9 +1464,9 @@ impl WasmHost {
                         let val = read_string_from_caller(&mut caller, val_ptr, val_len)?;
                         let storage = caller
                             .data()
-                            .storage
+                            .fluxcell_storage
                             .clone()
-                            .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
+                            .ok_or_else(|| anyhow!("No fluxcell storage configured on this chassis"))?;
                         let ok = run_async(storage.set(&key, &val, ttl_seconds))?;
                         Ok((key, ok))
                     })() {
@@ -1447,9 +1505,9 @@ impl WasmHost {
                         let key = read_string_from_caller(&mut caller, key_ptr, key_len)?;
                         let storage = caller
                             .data()
-                            .storage
+                            .fluxcell_storage
                             .clone()
-                            .ok_or_else(|| anyhow!("No storage configured on this chassis"))?;
+                            .ok_or_else(|| anyhow!("No fluxcell storage configured on this chassis"))?;
                         let ok = run_async(storage.delete(&key))?;
                         Ok((key, ok))
                     })() {
@@ -1474,6 +1532,61 @@ impl WasmHost {
                         Ok(true) => 1,
                         _ => 0,
                     }
+                },
+            )
+            .map_err(|e| anyhow!("{:#}", e))?;
+
+        Ok(())
+    }
+
+    fn bind_host_redis(&self, linker: &mut Linker<HostState>) -> Result<()> {
+        linker
+            .func_wrap(
+                "host_redis",
+                "execute",
+                |mut caller: Caller<'_, HostState>,
+                 cmd_ptr: u32,
+                 cmd_len: u32,
+                 args_ptr: u32,
+                 args_len: u32|
+                 -> u64 {
+                    let start = std::time::Instant::now();
+                    let (cmd_captured, res): (Option<String>, Result<serde_json::Value>) = match (|| {
+                        let cmd = read_string_from_caller(&mut caller, cmd_ptr, cmd_len)?;
+                        let args_json = read_string_from_caller(&mut caller, args_ptr, args_len)?;
+                        let args: Vec<String> = if args_json.trim().is_empty() {
+                            Vec::new()
+                        } else {
+                            serde_json::from_str(&args_json)
+                                .map_err(|e| anyhow!("Invalid JSON array of arguments for redis command: {}", e))?
+                        };
+                        let storage = caller
+                            .data()
+                            .fluxcell_storage
+                            .clone()
+                            .ok_or_else(|| anyhow!("No fluxcell storage/redis configured on this chassis"))?;
+                        let val = run_async(storage.execute_cmd(&cmd, &args))?;
+                        Ok((cmd, val))
+                    })() {
+                        Ok((c, v)) => (Some(c), Ok(v)),
+                        Err(e) => (None, Err(e)),
+                    };
+
+                    let duration_us = start.elapsed().as_micros() as u64;
+                    let status = if res.is_ok() { "ok" } else { "error" };
+                    caller.data_mut().active_host_spans.push(crate::telemetry::HostCallSpan {
+                        call_type: "redis:execute".to_string(),
+                        target: cmd_captured.unwrap_or_else(|| "redis".to_string()),
+                        duration_us,
+                        status: status.to_string(),
+                        detail: None,
+                    });
+
+                    let resp = match res {
+                        Ok(val) => serde_json::json!({ "ok": val }),
+                        Err(e) => serde_json::json!({ "err": format!("{:#}", e) }),
+                    };
+                    write_string_to_caller(&mut caller, &resp.to_string()).unwrap_or(0)
                 },
             )
             .map_err(|e| anyhow!("{:#}", e))?;
@@ -2201,4 +2314,56 @@ mod tests {
         let res3 = host.invoke_event("checkpoint-cell", &event_payload_2).unwrap();
         assert_eq!(res3["status"], "first_run");
     }
+
+    #[test]
+    fn test_decoupled_storage_tiers() {
+        use crate::storage::FluxStorage;
+        let wat_tiers = r#"
+        (module
+          (import "checkpoint" "save" (func $chk_save (param i32 i32 i32 i32 i64) (result i32)))
+          (import "kv_store" "set" (func $kv_set (param i32 i32 i32 i32 i64) (result i32)))
+          (memory (export "memory") 1)
+          (data (i32.const 1024) "step_auth")
+          (data (i32.const 1040) "{\"internal\":true}")
+          (data (i32.const 1060) "user_session")
+          (data (i32.const 1080) "user_123_data")
+          (func (export "allocate") (param i32) (result i32) i32.const 2048)
+          (func (export "deallocate") (param i32 i32))
+          (func (export "handle_event") (param i32 i32) (result i64)
+            ;; 1. Save checkpoint into internal storage
+            (drop (call $chk_save (i32.const 1024) (i32.const 9) (i32.const 1040) (i32.const 17) (i64.const 3600)))
+            ;; 2. Save key into fluxcell KV storage
+            (drop (call $kv_set (i32.const 1060) (i32.const 12) (i32.const 1080) (i32.const 13) (i64.const 3600)))
+            (return (i64.const 0))
+          )
+        )
+        "#;
+
+        let internal_store = Arc::new(crate::storage::KevyStorage::new_in_memory().unwrap());
+        let fluxcell_store = Arc::new(crate::storage::KevyStorage::new_in_memory().unwrap());
+
+        let host = WasmHost::with_dual_storage(5, Some(internal_store.clone()), Some(fluxcell_store.clone()), None).unwrap();
+        host.register_wat("tier-cell", wat_tiers, FluxcellWasmConfig::default()).unwrap();
+
+        let event = serde_json::json!({
+            "id": "cmd-tier-test-01",
+            "topic": "test.tier",
+            "payload": {}
+        });
+
+        let _ = host.invoke_event("tier-cell", &event);
+
+        // Verify internal storage has checkpoint but NOT kv key
+        let chk = run_async(internal_store.get("chk:cmd-tier-test-01:step_auth")).unwrap();
+        assert_eq!(chk.as_deref(), Some("{\"internal\":true}"));
+        let leak_in_internal = run_async(internal_store.get("user_session")).unwrap();
+        assert_eq!(leak_in_internal, None, "KV store key must not leak into internal storage");
+
+        // Verify fluxcell storage has kv key but NOT checkpoint
+        let kv = run_async(fluxcell_store.get("user_session")).unwrap();
+        assert_eq!(kv.as_deref(), Some("user_123_data"));
+        let leak_in_fluxcell = run_async(fluxcell_store.get("chk:cmd-tier-test-01:step_auth")).unwrap();
+        assert_eq!(leak_in_fluxcell, None, "Checkpoint must not leak into fluxcell storage");
+    }
 }
+

@@ -14,6 +14,7 @@ pub mod hlc;
 pub mod http;
 pub mod macros;
 pub mod prelude;
+pub mod redis;
 pub mod telemetry;
 
 use serde::{Deserialize, Serialize};

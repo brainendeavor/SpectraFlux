@@ -40,7 +40,7 @@ async fn test_typescript_magic_link_fluxcell_full_lifecycle() {
         .expect("Failed to subscribe to broker");
 
     let host = Arc::new(
-        WasmHost::with_capabilities(5, None, None, Some(broker.clone()))
+        WasmHost::with_capabilities(5, None, None, None, Some(broker.clone()))
             .expect("Failed to initialize WasmHost"),
     );
 

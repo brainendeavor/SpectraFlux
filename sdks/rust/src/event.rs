@@ -56,6 +56,59 @@ impl EventContext {
         serde_json::from_slice(&self.payload)
     }
 
+    /// Extracts the authenticated user ID (`userId`, `user_id`, `sub`, or `http.headers.x-user-id`) if present.
+    pub fn user_id(&self) -> Option<String> {
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&self.payload) {
+            val.pointer("/userId")
+                .or_else(|| val.pointer("/user_id"))
+                .or_else(|| val.pointer("/sub"))
+                .or_else(|| val.pointer("/http/headers/x-user-id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Extracts the tenant identifier (`tenantId`, `tenant_id`, `org_id`, or `http.headers.x-tenant-id`) if present.
+    pub fn tenant_id(&self) -> Option<String> {
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&self.payload) {
+            val.pointer("/tenantId")
+                .or_else(|| val.pointer("/tenant_id"))
+                .or_else(|| val.pointer("/org_id"))
+                .or_else(|| val.pointer("/http/headers/x-tenant-id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Extracts the authenticated roles (`roles` array or comma-delimited `http.headers.x-user-roles`) if present.
+    pub fn roles(&self) -> Vec<String> {
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&self.payload) {
+            if let Some(arr) = val.pointer("/roles").and_then(|v| v.as_array()) {
+                return arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+            }
+            if let Some(roles_str) = val.pointer("/http/headers/x-user-roles").and_then(|v| v.as_str()) {
+                return roles_str
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Checks whether the caller possesses a specific role (case-insensitive).
+    pub fn has_role(&self, role: &str) -> bool {
+        self.roles().iter().any(|r| r.eq_ignore_ascii_case(role))
+    }
+
     /// Executes a durable, idempotent step.
     /// If the step has already executed for this command/event ID,
     /// returns the cached result immediately without invoking `action`.

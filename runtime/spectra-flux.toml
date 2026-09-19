@@ -9,9 +9,12 @@ method = "nats"
 addr = "nats://127.0.0.1:4222"
 consumer_group = "spectra-flux-workers"
 
-[storage]
-backend = "embedded_kevy"
-# addr = "redis://127.0.0.1:6379" # For external Redis/Valkey
+[internal-storage]
+url = "kevy://embedded"
+
+[fluxcell-storage]
+url = "kevy:///data/fluxcell-storage.kevy"
+# url = "redis://127.0.0.1:6379" # For external Redis/Valkey cluster
 
 [database]
 url = "postgresql://postgres:password@localhost:5432/spectraflux"

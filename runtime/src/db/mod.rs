@@ -1,3 +1,4 @@
+pub mod migrations;
 pub mod traits;
 
 #[allow(unused_imports)]
@@ -5,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub use migrations::run_embedded_migrations;
 pub use traits::{FluxDb, FluxTx};
 
 /// Registry of configured database pools accessible by Fluxcells
@@ -115,6 +117,16 @@ impl PostgresDb {
         Ok(Self {
             pool: Arc::new(pool),
         })
+    }
+
+    /// Executes all pending dbmate-compatible migrations using the embedded migration registry.
+    pub async fn run_migrations(&self) -> Result<usize> {
+        migrations::run_embedded_migrations(&self.pool).await
+    }
+
+    /// Idempotently creates the persistent RBAC/ABAC user roles table via dbmate migration.
+    pub async fn bootstrap_auth_tables(&self) -> Result<()> {
+        self.run_migrations().await.map(|_| ())
     }
 }
 

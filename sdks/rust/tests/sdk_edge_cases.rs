@@ -51,6 +51,39 @@ fn test_event_context_parsing_edge_cases() {
     let alt_ctx = EventContext::from_bytes(&serde_json::to_vec(&alt_json).unwrap());
     assert_eq!(alt_ctx.event_id, "alt-999");
     assert_eq!(alt_ctx.topic, "audit.logs");
+
+    // 4. Authenticated context with user, tenant, and roles
+    let auth_json = json!({
+        "id": "evt-auth-1",
+        "userId": "usr_alpha",
+        "tenantId": "org_beta",
+        "roles": ["admin", "developer"]
+    });
+    let auth_ctx = EventContext::from_bytes(&serde_json::to_vec(&auth_json).unwrap());
+    assert_eq!(auth_ctx.user_id(), Some("usr_alpha".to_string()));
+    assert_eq!(auth_ctx.tenant_id(), Some("org_beta".to_string()));
+    assert_eq!(auth_ctx.roles(), vec!["admin", "developer"]);
+    assert!(auth_ctx.has_role("admin"));
+    assert!(auth_ctx.has_role("DEVELOPER"));
+    assert!(!auth_ctx.has_role("superadmin"));
+
+    // 5. Authenticated context from SpectraGQL injected HTTP headers
+    let header_json = json!({
+        "id": "evt-auth-2",
+        "http": {
+            "headers": {
+                "x-user-id": "usr_gateway",
+                "x-tenant-id": "tenant_gateway",
+                "x-user-roles": "viewer, editor"
+            }
+        }
+    });
+    let header_ctx = EventContext::from_bytes(&serde_json::to_vec(&header_json).unwrap());
+    assert_eq!(header_ctx.user_id(), Some("usr_gateway".to_string()));
+    assert_eq!(header_ctx.tenant_id(), Some("tenant_gateway".to_string()));
+    assert_eq!(header_ctx.roles(), vec!["viewer", "editor"]);
+    assert!(header_ctx.has_role("editor"));
+    assert!(!header_ctx.has_role("admin"));
 }
 
 #[test]

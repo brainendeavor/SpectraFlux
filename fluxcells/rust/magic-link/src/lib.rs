@@ -36,6 +36,10 @@ pub struct VerifyResponse {
     pub status: String,
     pub email: String,
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<String>,
     pub redirect_uri: Option<String>,
 }
 
@@ -269,7 +273,114 @@ pub fn get_routes() -> Vec<MagicLinkRoute> {
             path: "/status".to_string(),
             description: "Auth service health and status".to_string(),
         },
+        MagicLinkRoute {
+            method: "GET".to_string(),
+            path: "/.well-known/jwks.json".to_string(),
+            description: "OIDC JSON Web Key Set".to_string(),
+        },
+        MagicLinkRoute {
+            method: "GET".to_string(),
+            path: "/.well-known/openid-configuration".to_string(),
+            description: "OIDC OpenID Connect discovery document".to_string(),
+        },
     ]
+}
+
+/// Mints a standard HS256 JWT containing OIDC claims.
+pub fn mint_auth_jwt_hs256(
+    sub: &str,
+    email: &str,
+    roles: &[&str],
+    tenant_id: Option<&str>,
+    secret: &[u8],
+    ttl_secs: u64,
+) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let exp = now + ttl_secs;
+
+    let header = serde_json::json!({
+        "alg": "HS256",
+        "typ": "JWT"
+    });
+
+    let mut payload = serde_json::json!({
+        "sub": sub,
+        "email": email,
+        "roles": roles,
+        "iat": now,
+        "exp": exp,
+    });
+    if let Some(tid) = tenant_id {
+        payload["org_id"] = serde_json::Value::String(tid.to_string());
+    }
+
+    let header_b64 = base64url_encode(&serde_json::to_vec(&header).unwrap_or_default());
+    let payload_b64 = base64url_encode(&serde_json::to_vec(&payload).unwrap_or_default());
+    let signing_input = format!("{}.{}", header_b64, payload_b64);
+
+    let sig = hmac_sha256(secret, signing_input.as_bytes());
+    let sig_b64 = base64url_encode(&sig);
+
+    format!("{}.{}", signing_input, sig_b64)
+}
+
+fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut k = [0u8; 64];
+    if key.len() > 64 {
+        let hash = Sha256::digest(key);
+        k[..32].copy_from_slice(&hash);
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+    let mut ipad = [0x36u8; 64];
+    let mut opad = [0x5cu8; 64];
+    for i in 0..64 {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+    let mut inner = Sha256::new();
+    inner.update(&ipad);
+    inner.update(message);
+    let inner_hash = inner.finalize();
+
+    let mut outer = Sha256::new();
+    outer.update(&opad);
+    outer.update(&inner_hash);
+    outer.finalize().into()
+}
+
+pub fn base64url_encode(input: &[u8]) -> String {
+    const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity((input.len() * 4 + 2) / 3);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
+        out.push(CHARS[b0 >> 2] as char);
+        out.push(CHARS[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
+        if chunk.len() > 1 {
+            out.push(CHARS[((b1 & 0x0f) << 2) | (b2 >> 6)] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(CHARS[b2 & 0x3f] as char);
+        }
+    }
+    out
+}
+
+pub fn get_openid_configuration(base_url: &str) -> serde_json::Value {
+    let clean_url = base_url.trim_end_matches('/');
+    serde_json::json!({
+        "issuer": clean_url,
+        "jwks_uri": format!("{}/auth/.well-known/jwks.json", clean_url),
+        "response_types_supported": ["token"],
+        "subject_types_supported": ["public"],
+        "id_token_signing_alg_values_supported": ["HS256", "RS256"]
+    })
 }
 
 #[cfg(test)]
@@ -329,7 +440,10 @@ mod tests {
     #[test]
     fn test_routes_and_subscriptions() {
         assert_eq!(get_subscriptions().len(), 2);
-        assert_eq!(get_routes().len(), 3);
+        let routes = get_routes();
+        assert_eq!(routes.len(), 5);
+        assert!(routes.iter().any(|r| r.path == "/.well-known/jwks.json"));
+        assert!(routes.iter().any(|r| r.path == "/.well-known/openid-configuration"));
     }
 
     #[test]
@@ -440,6 +554,27 @@ mod tests {
         assert!(!rendered.html_body.contains("javascript:"));
         // Accent color should fall back to safe default
         assert!(rendered.html_body.contains("#38bdf8"));
+    }
+
+    #[test]
+    fn test_mint_auth_jwt_hs256_and_openid_discovery() {
+        let secret = b"secret_key_for_magic_link_jwt";
+        let token = mint_auth_jwt_hs256(
+            "usr_alice",
+            "alice@example.com",
+            &["editor", "admin"],
+            Some("tenant_coeval"),
+            secret,
+            3600,
+        );
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+
+        let oidc_cfg = get_openid_configuration("https://auth.example.com");
+        assert_eq!(oidc_cfg["issuer"], "https://auth.example.com");
+        assert_eq!(oidc_cfg["jwks_uri"], "https://auth.example.com/auth/.well-known/jwks.json");
+
+        assert_eq!(get_routes().len(), 5);
     }
 }
 

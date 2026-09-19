@@ -13,6 +13,10 @@ pub struct FluxConfig {
     pub host: String,
     #[serde(default)]
     pub broker: BrokerConfig,
+    #[serde(default, alias = "internal-storage", alias = "internal_storage")]
+    pub internal_storage: InternalStorageConfig,
+    #[serde(default, alias = "fluxcell-storage", alias = "fluxcell_storage")]
+    pub fluxcell_storage: FluxcellStorageConfig,
     #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
@@ -48,6 +52,8 @@ impl Default for FluxConfig {
             port: default_port(),
             host: default_host(),
             broker: BrokerConfig::default(),
+            internal_storage: InternalStorageConfig::default(),
+            fluxcell_storage: FluxcellStorageConfig::default(),
             storage: StorageConfig::default(),
             databases: HashMap::new(),
             database: DatabaseConfig::default(),
@@ -151,6 +157,26 @@ impl FluxConfig {
                     }
                 }
             }
+            // Storage overrides
+            if let Ok(u) = std::env::var("FLUX_INTERNAL_STORAGE_URL").or_else(|_| std::env::var("FLUX__INTERNAL_STORAGE__URL")) {
+                if !u.trim().is_empty() {
+                    cfg.internal_storage.url = u;
+                }
+            }
+            if let Ok(u) = std::env::var("FLUX_FLUXCELL_STORAGE_URL").or_else(|_| std::env::var("FLUX__FLUXCELL_STORAGE__URL")) {
+                if !u.trim().is_empty() {
+                    cfg.fluxcell_storage.url = u;
+                }
+            } else if let Ok(redis_url) = std::env::var("REDIS_URL") {
+                if !redis_url.trim().is_empty() {
+                    cfg.fluxcell_storage.url = redis_url;
+                }
+            } else if let Ok(valkey_url) = std::env::var("VALKEY_URL") {
+                if !valkey_url.trim().is_empty() {
+                    cfg.fluxcell_storage.url = valkey_url;
+                }
+            }
+            cfg.sync_storage_tiers();
         };
 
         if let Some(resolved_path) = Self::resolve_config_path(path) {
@@ -197,6 +223,31 @@ impl FluxConfig {
         }
     }
 
+    pub fn sync_storage_tiers(&mut self) {
+        // If legacy [storage] was explicitly specified with redis/valkey or custom addr,
+        // synchronize fluxcell_storage.url to match.
+        if self.fluxcell_storage.url == default_fluxcell_storage_url() {
+            if let Some(addr) = &self.storage.addr {
+                self.fluxcell_storage.url = addr.clone();
+            } else if self.storage.backend == "redis" || self.storage.backend == "valkey" {
+                self.fluxcell_storage.url = "redis://127.0.0.1:6379".to_string();
+            }
+        }
+        // If fluxcell_storage was explicitly configured (not default), reflect it in storage for backwards compatibility
+        if self.fluxcell_storage.url != default_fluxcell_storage_url() {
+            if self.storage.backend == default_storage_backend() {
+                if self.fluxcell_storage.url.starts_with("valkey://") {
+                    self.storage.backend = "valkey".to_string();
+                } else if self.fluxcell_storage.url.starts_with("redis://") {
+                    self.storage.backend = "redis".to_string();
+                }
+            }
+            if self.storage.addr.is_none() {
+                self.storage.addr = Some(self.fluxcell_storage.url.clone());
+            }
+        }
+    }
+
     pub fn load_from_file(path: &str) -> Result<Self> {
         Self::load_from_file_with_source(path).map(|(cfg, _)| cfg)
     }
@@ -206,6 +257,7 @@ impl FluxConfig {
             .add_source(config::File::from_str(s, config::FileFormat::Toml))
             .build()?;
         let mut cfg: Self = settings.try_deserialize()?;
+        cfg.sync_storage_tiers();
         for (k, v) in default_profiles() {
             cfg.profiles.entry(k).or_insert(v);
         }
@@ -220,6 +272,8 @@ impl FluxConfig {
             port: 8081,
             host: "0.0.0.0".to_string(),
             broker: BrokerConfig::default(),
+            internal_storage: InternalStorageConfig::default(),
+            fluxcell_storage: FluxcellStorageConfig::default(),
             storage: StorageConfig::default(),
             databases: HashMap::new(),
             database: DatabaseConfig::default(),
@@ -304,6 +358,12 @@ impl FluxConfig {
             "storage": {
                 "backend": self.storage.backend,
                 "addr": self.storage.addr,
+            },
+            "internalStorage": {
+                "url": self.internal_storage.url,
+            },
+            "fluxcellStorage": {
+                "url": self.fluxcell_storage.url,
             },
             "database": default_db,
             "databases": dbs,
@@ -449,6 +509,42 @@ impl Default for BrokerConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InternalStorageConfig {
+    #[serde(default = "default_internal_storage_url")]
+    pub url: String,
+}
+
+pub fn default_internal_storage_url() -> String {
+    "kevy://embedded".to_string()
+}
+
+impl Default for InternalStorageConfig {
+    fn default() -> Self {
+        Self {
+            url: default_internal_storage_url(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FluxcellStorageConfig {
+    #[serde(default = "default_fluxcell_storage_url")]
+    pub url: String,
+}
+
+pub fn default_fluxcell_storage_url() -> String {
+    "kevy:///data/fluxcell-storage.kevy".to_string()
+}
+
+impl Default for FluxcellStorageConfig {
+    fn default() -> Self {
+        Self {
+            url: default_fluxcell_storage_url(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageConfig {
     #[serde(default = "default_storage_backend")]
@@ -477,6 +573,8 @@ pub struct DatabaseInstanceConfig {
     pub max_connections: usize,
     #[serde(default)]
     pub driver: Option<String>,
+    #[serde(default = "default_auto_migrate")]
+    pub auto_migrate: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -484,10 +582,16 @@ pub struct DatabaseConfig {
     pub url: Option<String>,
     #[serde(default = "default_db_max_connections")]
     pub max_connections: usize,
+    #[serde(default = "default_auto_migrate")]
+    pub auto_migrate: bool,
 }
 
 fn default_db_max_connections() -> usize {
     16
+}
+
+fn default_auto_migrate() -> bool {
+    true
 }
 
 impl Default for DatabaseConfig {
@@ -498,6 +602,9 @@ impl Default for DatabaseConfig {
                 .or_else(|_| std::env::var("FLUX_DATABASE_URL"))
                 .ok(),
             max_connections: default_db_max_connections(),
+            auto_migrate: std::env::var("FLUX__DATABASE__AUTO_MIGRATE")
+                .map(|v| v != "false" && v != "0")
+                .unwrap_or(true),
         }
     }
 }
@@ -782,6 +889,8 @@ mod tests {
         assert_eq!(cfg.broker.method, "in_memory");
         assert_eq!(cfg.broker.addr, "localhost");
         assert_eq!(cfg.broker.consumer_group, "spectra-flux-workers");
+        assert_eq!(cfg.internal_storage.url, "kevy://embedded");
+        assert_eq!(cfg.fluxcell_storage.url, "kevy:///data/fluxcell-storage.kevy");
         assert_eq!(cfg.storage.backend, "embedded_kevy");
         assert_eq!(cfg.storage.addr, None);
         assert_eq!(cfg.gateway_admin_url, Some("http://127.0.0.1:8000".to_string()));
@@ -812,6 +921,8 @@ mod tests {
         // Broker and storage should fall back to defaults
         assert_eq!(cfg.broker.method, "in_memory");
         assert_eq!(cfg.storage.backend, "embedded_kevy");
+        assert_eq!(cfg.internal_storage.url, "kevy://embedded");
+        assert_eq!(cfg.fluxcell_storage.url, "kevy:///data/fluxcell-storage.kevy");
     }
 
     #[test]
@@ -832,7 +943,7 @@ mod tests {
             addr = "redis://10.0.0.3:6379"
 
             [database]
-            url = "postgres://postgres:secret@localhost:5432/coeval"
+            url = "postgres://postgres:secret@localhost:5432/spectraflux"
             max_connections = 32
 
             [fluxcells.magic_link]
@@ -855,7 +966,9 @@ mod tests {
         assert_eq!(cfg.broker.consumer_group, "flux-cluster");
         assert_eq!(cfg.storage.backend, "redis");
         assert_eq!(cfg.storage.addr.as_deref(), Some("redis://10.0.0.3:6379"));
-        assert_eq!(cfg.database.url.as_deref(), Some("postgres://postgres:secret@localhost:5432/coeval"));
+        assert_eq!(cfg.internal_storage.url, "kevy://embedded");
+        assert_eq!(cfg.fluxcell_storage.url, "redis://10.0.0.3:6379");
+        assert_eq!(cfg.database.url.as_deref(), Some("postgres://postgres:secret@localhost:5432/spectraflux"));
         assert_eq!(cfg.database.max_connections, 32);
 
         assert_eq!(cfg.fluxcells.len(), 2);
@@ -906,6 +1019,35 @@ mod tests {
             std::env::remove_var("FLUX__BROKER__METHOD");
             std::env::remove_var("FLUX__BROKER__ADDR");
             std::env::remove_var("FLUX__STORAGE__BACKEND");
+        }
+    }
+
+    #[test]
+    fn test_storage_tiers_explicit_toml() {
+        let toml_str = r#"
+            [internal-storage]
+            url = "kevy://memory"
+
+            [fluxcell-storage]
+            url = "redis://redis-cluster:6379"
+        "#;
+        let cfg = FluxConfig::from_toml_str(toml_str).unwrap();
+        assert_eq!(cfg.internal_storage.url, "kevy://memory");
+        assert_eq!(cfg.fluxcell_storage.url, "redis://redis-cluster:6379");
+        assert_eq!(cfg.storage.backend, "redis");
+        assert_eq!(cfg.storage.addr.as_deref(), Some("redis://redis-cluster:6379"));
+    }
+
+    #[test]
+    fn test_storage_tiers_redis_url_fallback() {
+        unsafe {
+            std::env::set_var("REDIS_URL", "redis://redis.railway.internal:6379");
+        }
+        let cfg = FluxConfig::load_from_file("nonexistent.toml").unwrap();
+        assert_eq!(cfg.fluxcell_storage.url, "redis://redis.railway.internal:6379");
+        assert_eq!(cfg.internal_storage.url, "kevy://embedded");
+        unsafe {
+            std::env::remove_var("REDIS_URL");
         }
     }
 

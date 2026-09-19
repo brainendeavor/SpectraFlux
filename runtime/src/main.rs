@@ -6,7 +6,7 @@ use spectra_flux::config::FluxConfig;
 use spectra_flux::db::{DatabaseRegistry, PostgresDb};
 use spectra_flux::deployer::{DeployerGuard, DeployerRegistry, FluxcellDeployer, FluxcellStatus};
 use spectra_flux::http::{FluxRouter, RouteDefinition};
-use spectra_flux::storage::create_storage;
+use spectra_flux::storage::create_storage_from_url;
 use spectra_flux::telemetry::TelemetryClient;
 use spectra_flux::wasm::{CircuitBreakerConfig, FluxcellWasmConfig, WasmHost};
 use std::net::SocketAddr;
@@ -74,13 +74,20 @@ async fn main() -> Result<()> {
         );
     }
 
-    // 3. Initialize Unified Storage
-    log::info!("Initializing storage backend '{}'...", config.storage.backend);
-    let storage = create_storage(&config.storage.backend, config.storage.addr.as_deref())
+    // 3. Initialize Decoupled Storage Tiers
+    log::info!("Initializing internal storage from '{}'...", config.internal_storage.url);
+    let internal_storage = create_storage_from_url(&config.internal_storage.url)
         .await
-        .context("Failed to initialize storage engine")?;
-    telemetry.record_log("INFO", &format!("Storage backend '{}' ready", config.storage.backend), None);
-    let trace_storage = Arc::new(spectra_flux::telemetry::DomainTraceStorage::new(storage.clone()));
+        .context("Failed to initialize internal storage engine")?;
+    telemetry.record_log("INFO", &format!("Internal storage '{}' ready", config.internal_storage.url), None);
+
+    log::info!("Initializing fluxcell storage from '{}'...", config.fluxcell_storage.url);
+    let fluxcell_storage = create_storage_from_url(&config.fluxcell_storage.url)
+        .await
+        .context("Failed to initialize fluxcell storage engine")?;
+    telemetry.record_log("INFO", &format!("Fluxcell storage '{}' ready", config.fluxcell_storage.url), None);
+
+    let trace_storage = Arc::new(spectra_flux::telemetry::DomainTraceStorage::new(internal_storage.clone()));
 
     // 3.5. Initialize Database Registry
     let mut db_registry = DatabaseRegistry::new();
@@ -88,6 +95,11 @@ async fn main() -> Result<()> {
         log::info!("Connecting to database '{}'...", name);
         match PostgresDb::new(&db_cfg.url, db_cfg.max_connections) {
             Ok(db) => {
+                if db_cfg.auto_migrate {
+                    if let Err(e) = db.run_migrations().await {
+                        log::warn!("Failed to auto-run dbmate migrations for database '{}': {:#}", name, e);
+                    }
+                }
                 let is_default = name == "default";
                 db_registry.register(name, Arc::new(db), is_default);
                 log::info!("Database '{}' registered", name);
@@ -101,6 +113,11 @@ async fn main() -> Result<()> {
         if let Some(db_url) = &config.database.url {
             match PostgresDb::new(db_url, config.database.max_connections) {
                 Ok(db) => {
+                    if config.database.auto_migrate {
+                        if let Err(e) = db.run_migrations().await {
+                            log::warn!("Failed to auto-run dbmate migrations for default database: {:#}", e);
+                        }
+                    }
                     db_registry.register("default", Arc::new(db), true);
                     log::info!("Registered default database from config.database");
                 }
@@ -114,8 +131,13 @@ async fn main() -> Result<()> {
     // 4. Initialize WASM Host
     log::info!("Initializing Wasmtime Host Engine with epoch interruption...");
     let wasm_host = Arc::new(
-        WasmHost::with_db(5, Some(storage.clone()), Some(Arc::new(db_registry)))
-            .context("Failed to initialize WASM host engine")?,
+        WasmHost::with_dual_storage(
+            5,
+            Some(internal_storage.clone()),
+            Some(fluxcell_storage.clone()),
+            Some(Arc::new(db_registry)),
+        )
+        .context("Failed to initialize WASM host engine")?,
     );
 
     // 5. Initialize Router with Collision Detection
@@ -159,6 +181,8 @@ async fn main() -> Result<()> {
                         RouteDefinition::new("GET", "/verify", "Verify magic link token"),
                         RouteDefinition::new("POST", "/verify", "Redeem magic link token"),
                         RouteDefinition::new("GET", "/status", "Auth service status"),
+                        RouteDefinition::new("GET", "/.well-known/jwks.json", "OIDC JSON Web Key Set"),
+                        RouteDefinition::new("GET", "/.well-known/openid-configuration", "OIDC Discovery document"),
                     ],
                     "webhook" => vec![
                         RouteDefinition::new("GET", "/health", "Webhook service health"),
@@ -195,6 +219,8 @@ async fn main() -> Result<()> {
                     RouteDefinition::new("GET", "/verify", "Verify magic link token"),
                     RouteDefinition::new("POST", "/verify", "Redeem magic link token"),
                     RouteDefinition::new("GET", "/status", "Auth service status"),
+                    RouteDefinition::new("GET", "/.well-known/jwks.json", "OIDC JSON Web Key Set"),
+                    RouteDefinition::new("GET", "/.well-known/openid-configuration", "OIDC Discovery document"),
                 ],
                 "webhook" => vec![
                     RouteDefinition::new("GET", "/health", "Webhook service health"),
@@ -291,7 +317,7 @@ async fn main() -> Result<()> {
                     broker,
                     wasm_host.clone(),
                     telemetry.clone(),
-                    storage.clone(),
+                    internal_storage.clone(),
                     deployer.clone(),
                     Some(trace_storage.clone()),
                     config.resilience.clone(),
