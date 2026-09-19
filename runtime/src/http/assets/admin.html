@@ -926,6 +926,37 @@
           </div>
         </div>
       </div>
+
+      <div class="stat-card">
+        <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: #ec4899; display: flex; align-items: center; gap: 0.5rem;">
+          <span>📧 Outbound Transactional Mailer</span>
+        </h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
+          <div>
+            <div class="stat-label">Provider</div>
+            <span class="badge" id="cfgMailerProviderVal">-</span>
+          </div>
+          <div>
+            <div class="stat-label">API Key / Auth</div>
+            <span class="badge" id="cfgMailerAuthVal">-</span>
+          </div>
+          <div style="grid-column: span 2;">
+            <div class="stat-label">Sender Address (From)</div>
+            <code id="cfgMailerFromVal" style="font-size: 0.825rem; word-break: break-all;">-</code>
+          </div>
+          <div style="grid-column: span 2;">
+            <div class="stat-label">Public App Base URL</div>
+            <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+              <code id="cfgMailerBaseUrlVal" style="font-size: 0.825rem; word-break: break-all;">-</code>
+              <span id="cfgMailerBaseUrlWarn" class="badge badge-warn" style="display: none; font-size: 0.7rem;">⚠️ Localhost in Prod</span>
+            </div>
+          </div>
+          <div id="cfgMailerExtraRow" style="grid-column: span 2; display: none;">
+            <div class="stat-label" id="cfgMailerExtraLabel">Details</div>
+            <code id="cfgMailerExtraVal" style="font-size: 0.8rem; word-break: break-all;">-</code>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Execution Profiles & Worker Pool -->
@@ -1546,6 +1577,84 @@
             if (cfgDlq) {
               cfgDlq.textContent = res.dlqEnabled ? `Enabled (${res.dlqTopicPrefix || 'dlq.'}*)` : 'Disabled';
               cfgDlq.className = res.dlqEnabled ? 'badge badge-ok' : 'badge badge-warn';
+            }
+
+            // Outbound Transactional Mailer config
+            const m = config.mailer || {};
+            const cfgMailerProv = document.getElementById('cfgMailerProviderVal');
+            const cfgMailerAuth = document.getElementById('cfgMailerAuthVal');
+            const cfgMailerFrom = document.getElementById('cfgMailerFromVal');
+            const cfgMailerBaseUrl = document.getElementById('cfgMailerBaseUrlVal');
+            const cfgMailerBaseUrlWarn = document.getElementById('cfgMailerBaseUrlWarn');
+            const cfgMailerExtraRow = document.getElementById('cfgMailerExtraRow');
+            const cfgMailerExtraLabel = document.getElementById('cfgMailerExtraLabel');
+            const cfgMailerExtraVal = document.getElementById('cfgMailerExtraVal');
+
+            if (cfgMailerProv) {
+              const prov = (m.provider || 'console').toLowerCase();
+              if (prov === 'console') {
+                cfgMailerProv.textContent = m.isProduction ? 'Console (UNCONFIGURED)' : 'Console (Dev Logger)';
+                cfgMailerProv.className = m.isProduction ? 'badge badge-error' : 'badge badge-warn';
+              } else if (prov === 'mailtrap') {
+                cfgMailerProv.textContent = 'Mailtrap';
+                cfgMailerProv.className = 'badge badge-info';
+              } else if (prov === 'resend') {
+                cfgMailerProv.textContent = 'Resend';
+                cfgMailerProv.className = 'badge badge-ok';
+              } else if (prov === 'postmark') {
+                cfgMailerProv.textContent = 'Postmark';
+                cfgMailerProv.className = 'badge badge-ok';
+              } else if (prov === 'sendgrid') {
+                cfgMailerProv.textContent = 'SendGrid';
+                cfgMailerProv.className = 'badge badge-ok';
+              } else if (prov === 'smtp') {
+                cfgMailerProv.textContent = 'Universal SMTP';
+                cfgMailerProv.className = 'badge badge-purple';
+              } else {
+                cfgMailerProv.textContent = prov.toUpperCase();
+                cfgMailerProv.className = 'badge badge-info';
+              }
+            }
+
+            if (cfgMailerAuth) {
+              const prov = (m.provider || 'console').toLowerCase();
+              if (prov === 'console') {
+                cfgMailerAuth.textContent = m.isProduction ? 'Missing Key' : 'Dev / None';
+                cfgMailerAuth.className = m.isProduction ? 'badge badge-error' : 'badge badge-info';
+              } else if (m.apiKeyConfigured) {
+                cfgMailerAuth.textContent = m.apiKeyMasked ? `Active (${m.apiKeyMasked})` : 'Configured';
+                cfgMailerAuth.className = 'badge badge-ok';
+              } else {
+                cfgMailerAuth.textContent = 'Missing API Key';
+                cfgMailerAuth.className = 'badge badge-error';
+              }
+            }
+
+            if (cfgMailerFrom) {
+              cfgMailerFrom.textContent = m.fromFormatted || (m.fromEmail ? `${m.fromName || 'Auth'} <${m.fromEmail}>` : 'noreply@example.com');
+            }
+
+            if (cfgMailerBaseUrl) {
+              const bUrl = m.baseUrl || 'http://localhost:8000';
+              cfgMailerBaseUrl.textContent = bUrl;
+              if (cfgMailerBaseUrlWarn) {
+                const isLocal = bUrl.includes('localhost') || bUrl.includes('127.0.0.1');
+                cfgMailerBaseUrlWarn.style.display = (m.isProduction && isLocal) ? 'inline-block' : 'none';
+              }
+            }
+
+            if (cfgMailerExtraRow && cfgMailerExtraLabel && cfgMailerExtraVal) {
+              if (m.mailtrapInboxId) {
+                cfgMailerExtraLabel.textContent = 'Mailtrap Sandbox Inbox ID';
+                cfgMailerExtraVal.textContent = m.mailtrapInboxId;
+                cfgMailerExtraRow.style.display = 'block';
+              } else if (m.smtpHost) {
+                cfgMailerExtraLabel.textContent = 'SMTP Server Target';
+                cfgMailerExtraVal.textContent = `${m.smtpHost}:${m.smtpPort || 587} (TLS: ${m.smtpSecure ? 'yes' : 'no'})`;
+                cfgMailerExtraRow.style.display = 'block';
+              } else {
+                cfgMailerExtraRow.style.display = 'none';
+              }
             }
 
             // Render execution profiles table with accurate per-profile fluxcell assignment

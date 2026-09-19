@@ -318,6 +318,7 @@ impl FluxConfig {
                 "dlqEnabled": self.resilience.dlq_enabled,
                 "dlqTopicPrefix": self.resilience.dlq_topic_prefix,
             },
+            "mailer": crate::mailer::MailerConfig::from_env().to_sanitized_json(),
         })
     }
 

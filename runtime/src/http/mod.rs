@@ -1368,6 +1368,8 @@ mod tests {
         assert_eq!(json["port"], 8081);
         assert_eq!(json["broker"]["method"], "in_memory");
         assert!(json["profiles"]["standard"].is_object());
+        assert!(json["mailer"].is_object());
+        assert!(json["mailer"]["provider"].is_string());
 
         // Test GET /admin/api/v1/overview includes config
         let req = Request::builder()

@@ -132,9 +132,9 @@ impl EventProcessor {
 
         // 3. Dispatch event to matching WASM fluxcells
         let subscribed_cells = self.wasm_host.find_subscribed_fluxcells(&msg.topic);
-        let mut all_succeeded = true;
+        let mut all_succeeded = !steps.iter().any(|s| s.error.is_some());
         let mut dlq_requested = false;
-        let mut failure_reason = String::new();
+        let mut failure_reason = steps.iter().find_map(|s| s.error.clone()).unwrap_or_default();
 
         for cell_name in subscribed_cells {
             if let Ok(payload_val) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {

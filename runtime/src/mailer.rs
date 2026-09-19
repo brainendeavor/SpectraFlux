@@ -83,15 +83,16 @@ impl MailerConfig {
 
         let from_email = env::var("FLUX__MAILER__FROM")
             .or_else(|_| env::var("EMAIL_FROM"))
-            .unwrap_or_else(|_| "auth@coeval.bio".to_string());
+            .unwrap_or_else(|_| "noreply@example.com".to_string());
 
         let from_name = env::var("FLUX__MAILER__FROM_NAME")
             .or_else(|_| env::var("EMAIL_FROM_NAME"))
-            .unwrap_or_else(|_| "CoEval".to_string());
+            .unwrap_or_else(|_| "Auth Service".to_string());
 
         let base_url = env::var("FLUX__MAILER__BASE_URL")
             .or_else(|_| env::var("APP_BASE_URL"))
             .or_else(|_| env::var("PUBLIC_APP_URL"))
+            .or_else(|_| env::var("RAILWAY_PUBLIC_DOMAIN").map(|d| format!("https://{}", d)))
             .unwrap_or_else(|_| "http://localhost:8000".to_string())
             .trim_end_matches('/')
             .to_string();
@@ -118,7 +119,8 @@ impl MailerConfig {
             .ok();
 
         let smtp_secure = env::var("FLUX__MAILER__SMTP_SECURE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .or_else(|_| env::var("SMTP_SECURE"))
+            .map(|v| v == "true" || v == "1")
             .unwrap_or(true);
 
         Self {
@@ -135,6 +137,47 @@ impl MailerConfig {
             smtp_secure,
         }
     }
+
+    /// Returns a sanitized JSON representation of mailer configuration for administrative inspection.
+    /// Invariant: Raw credentials, API keys, and passwords are never exposed.
+    pub fn to_sanitized_json(&self) -> serde_json::Value {
+        let is_prod = env::var("RAILWAY_ENVIRONMENT").is_ok()
+            || env::var("NODE_ENV").as_deref() == Ok("production")
+            || env::var("ENVIRONMENT").as_deref() == Ok("production");
+
+        let masked_api_key = self.api_key.as_ref().map(|k| {
+            if k.len() <= 8 {
+                "••••••••".to_string()
+            } else {
+                format!("{}••••{}", &k[..4], &k[k.len() - 4..])
+            }
+        });
+
+        let provider_str = match self.provider {
+            MailerProvider::Console => "console",
+            MailerProvider::Mailtrap => "mailtrap",
+            MailerProvider::Resend => "resend",
+            MailerProvider::Postmark => "postmark",
+            MailerProvider::Sendgrid => "sendgrid",
+            MailerProvider::Smtp => "smtp",
+        };
+
+        serde_json::json!({
+            "provider": provider_str,
+            "fromEmail": self.from_email,
+            "fromName": self.from_name,
+            "fromFormatted": format!("{} <{}>", self.from_name, self.from_email),
+            "baseUrl": self.base_url,
+            "apiKeyConfigured": self.api_key.is_some(),
+            "apiKeyMasked": masked_api_key,
+            "mailtrapInboxId": self.mailtrap_inbox_id,
+            "smtpHost": self.smtp_host,
+            "smtpPort": self.smtp_port,
+            "smtpUser": self.smtp_user,
+            "smtpSecure": self.smtp_secure,
+            "isProduction": is_prod,
+        })
+    }
 }
 
 /// Dispatches an outbound transactional email
@@ -147,6 +190,17 @@ pub async fn send_transactional_email(
 ) -> Result<(), String> {
     match config.provider {
         MailerProvider::Console => {
+            let is_prod = env::var("RAILWAY_ENVIRONMENT").is_ok()
+                || env::var("NODE_ENV").as_deref() == Ok("production")
+                || env::var("ENVIRONMENT").as_deref() == Ok("production");
+            let is_explicit = env::var("FLUX__MAILER__PROVIDER").as_deref() == Ok("console");
+
+            if is_prod && !is_explicit {
+                let err_msg = "No outbound transactional email provider configured in production! Set FLUX__MAILER__PROVIDER (e.g. 'mailtrap' or 'resend') and your provider API key in Railway environment variables.".to_string();
+                log::error!("{}", err_msg);
+                return Err(err_msg);
+            }
+
             println!("\n═══════════════════════════════════════════════════════════════════════");
             println!("📧 [DEV AUTH MAILER] Outbound Transactional Email");
             println!("   To      : {}", to);
@@ -432,8 +486,8 @@ mod tests {
         let cfg = MailerConfig {
             provider: MailerProvider::Console,
             api_key: None,
-            from_email: "test@coeval.bio".to_string(),
-            from_name: "CoEval".to_string(),
+            from_email: "noreply@example.com".to_string(),
+            from_name: "Auth Service".to_string(),
             base_url: "http://localhost:8000".to_string(),
             mailtrap_inbox_id: None,
             smtp_host: None,
@@ -453,5 +507,30 @@ mod tests {
         .await;
 
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_mailer_to_sanitized_json_masks_key() {
+        let cfg = MailerConfig {
+            provider: MailerProvider::Resend,
+            api_key: Some("re_1234567890abcdef".to_string()),
+            from_email: "noreply@example.com".to_string(),
+            from_name: "App Auth".to_string(),
+            base_url: "https://example.com".to_string(),
+            mailtrap_inbox_id: None,
+            smtp_host: None,
+            smtp_port: None,
+            smtp_user: None,
+            smtp_pass: None,
+            smtp_secure: true,
+        };
+
+        let json = cfg.to_sanitized_json();
+        assert_eq!(json["provider"], "resend");
+        assert_eq!(json["fromFormatted"], "App Auth <noreply@example.com>");
+        assert_eq!(json["apiKeyConfigured"], true);
+        assert_eq!(json["apiKeyMasked"], "re_1••••cdef");
+        // Ensure raw API key is NEVER exposed in the JSON
+        assert!(!json.to_string().contains("1234567890"));
     }
 }
