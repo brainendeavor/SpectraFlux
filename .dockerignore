@@ -1,0 +1,12 @@
+target/
+**/target/
+.git
+.github
+*.kevy
+data/
+node_modules/
+**/node_modules/
+.DS_Store
+*.local
+*.production
+BUG_FIX_LOG.md

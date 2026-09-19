@@ -21,6 +21,7 @@ COPY tools ./tools
 COPY seeds ./seeds
 COPY examples ./examples
 COPY wit ./wit
+COPY db ./db
 
 RUN cargo build --release -p spectra-flux
 

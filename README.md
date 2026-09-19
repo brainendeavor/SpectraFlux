@@ -37,8 +37,8 @@
 │                                      ▼                                      │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │ Host Capabilities Bridge (WIT Contract)                               │  │
-│  │   • host_db: Multi-Database Connection Pooling (deadpool-postgres)    │  │
-│  │   • kv_store: Embedded Kevy / Redis key-value operations             │  │
+│  │   • host_db: PostgreSQL Connection Pooling & Embedded dbmate          │  │
+│  │   • kv_store / host_redis: Decoupled Storage (internal vs fluxcell)   │  │
 │  │   • host_broker: Outbound topic dispatching                           │  │
 │  └───────────────────────────────────┬───────────────────────────────────┘  │
 │                                      ▼                                      │
@@ -75,7 +75,9 @@
 
 ## Core Documentation
 
+- **[Downstream Authorization (`authz`)](docs/authz.md)**: Cooperative dual-pillar security with SpectraGQL, consuming verified identity claims with zero cryptographic overhead, fine-grained domain authorization, and PostgreSQL `auth_user_roles`.
 - **[Chassis Runtime Architecture](docs/architecture.md)**: Wasmtime engine pooling, epoch interruption watchdog, and host capability imports (`host_db`, `kv_store`, `host_broker`).
+- **[Storage Architecture & Decoupled Tiers](docs/authz-and-storage.md)**: Decoupled storage tiers (`internal-storage` vs `fluxcell-storage`), unified `kevy://` URLs, PostgreSQL schema migrations via embedded `dbmate`, and `host_redis` ABI.
 - **[Deployer & Security Governance](docs/deployer-and-governance.md)**: Zero-compiler container invariant (< 25 MB), dynamic staging API, SSRF shield, and emergency lockdown.
 - **[Durable Steps & Resilience](docs/durable-steps-and-resilience.md)**: 80/20 durable step memoization (`ctx.step`), exponential backoff, DLQ routing, and monotonic HLC causality guards.
 - **[Embedded Admin Console & Observability](docs/admin-dashboard.md)**: Real-time execution profiles (p50/p95/p99 latency, fuel, memory), 1GB allotment, sanitized config inspector, and live logs.
