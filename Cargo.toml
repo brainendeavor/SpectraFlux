@@ -8,4 +8,5 @@ members = [
     "seeds/rust",
     "examples/rust/mailer",
 ]
+default-members = ["runtime"]
 resolver = "2"

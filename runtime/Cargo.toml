@@ -5,6 +5,15 @@ edition = "2024"
 description = "High-velocity streaming execution chassis and Fluxcell harness for SpectraGQL"
 license = "MIT"
 authors = ["SpectraGQL Contributors"]
+default-run = "spectra-flux"
+
+[[bin]]
+name = "spectra-flux"
+path = "src/main.rs"
+
+[[bin]]
+name = "dev"
+path = "src/bin/dev.rs"
 
 [dependencies]
 # Async Runtime & Utilities
