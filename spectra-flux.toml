@@ -1,21 +1,112 @@
-# SpectraFlux Default Configuration
+# =============================================================================
+# SpectraFlux Appliance Configuration
+# =============================================================================
+# High-velocity WebAssembly execution chassis and micro-worker appliance.
+#
+# Environment Variable Standard (12-Factor):
+# Any value in this file can be overridden via environment variables:
+#   - Double-underscore prefix: FLUX__<SECTION>__<KEY> (e.g. FLUX__BROKER__ADDR)
+#   - Standard single-underscore fallbacks (e.g. DATABASE_URL, FLUX_CONFIG,
+#     FLUX_DEPLOYER_STORAGE_DIR, FLUXCELLS_DIR, SPECTRA_ADMIN_URL).
+#
+# Storage & Volume Architecture:
+# - Internal Framework State: Saga checkpoints, magic-link OTP tokens, session cache.
+# - Fluxcell Application State: Isolated KV store and Redis protocol bindings.
+# - Deployer Wasm Storage: Persistent storage directory where dynamically uploaded
+#   or staged .wasm fluxcells and the registry manifest (fluxcells.json) are kept.
+# =============================================================================
 
 port = 8081
 host = "0.0.0.0"
-gateway_admin_url = "http://127.0.0.1:8000"
 
+# =============================================================================
+# SpectraGQL Gateway Edge Admin URL
+# =============================================================================
+# Upstream edge gateway for route synchronization, rescan, and worker telemetry.
+# Invariant: Must specify the BASE ORIGIN with scheme and port; NEVER include /admin.
+#
+# Localhost / Development:
+gateway_admin_url = "http://127.0.0.1:8000"
+#
+# Production (e.g. Railway private mesh):
+# gateway_admin_url = "http://spectragql.railway.internal:8000"
+
+# =============================================================================
+# Event Broker (Mode B Mutation Sink & Event-Driven Workflows)
+# =============================================================================
+# Configures the streaming message broker from which SpectraFlux consumes events.
+# Supported methods: "nats" (JetStream), "kafka", "redis_streams"
 [broker]
 method = "nats"
-addr = "nats://127.0.0.1:4222"
-consumer_group = "spectra-flux-workers"
 
+# Localhost / Development:
+addr = "nats://127.0.0.1:4222"
+
+# Production (e.g. Railway private network):
+# addr = "nats://nats.railway.internal:4222"
+
+# Consumer group identifier for load-balanced worker consumer instances:
+consumer_group = "spectra-flux-workers"
+stream = "spectra_events"
+
+# =============================================================================
+# Decoupled Storage Tier 1: Internal Chassis Framework State
+# =============================================================================
+# Reserved strictly for framework operations: Saga checkpoints, magic-link OTP
+# tokens, session cache, and domain traces.
+# Host ABI bindings for host_checkpoint use this isolated tier.
+[internal-storage]
+# Development: Fast in-process embedded storage:
+url = "kevy://embedded"
+
+# Production: Persistent volume file:
+# url = "kevy:///data/internal-storage.kevy"
+
+# =============================================================================
+# Decoupled Storage Tier 2: Guest Fluxcell Application State & KV Storage
+# =============================================================================
+# Dedicated exclusively to guest fluxcell application state, KV operations
+# (`kv_store`), and Redis protocol commands (`host_redis`).
+# Host ABI bindings NEVER cross storage boundaries.
+[fluxcell-storage]
+# Local Development default (relative path within workspace):
+url = "kevy://./data/fluxcell-storage.kevy"
+
+# Production Persistent Volume (e.g. Railway Persistent Volume mounted at /data):
+# url = "kevy:///data/fluxcell-storage.kevy"
+
+# External Managed Redis / Valkey Cluster alternative:
+# url = "redis://127.0.0.1:6379"
+# url = "redis://redis.railway.internal:6379"
+
+# Legacy compatibility fallback (automatically synchronized to fluxcell-storage)
 [storage]
 backend = "embedded_kevy"
-# addr = "redis://127.0.0.1:6379" # For external Redis/Valkey
+# addr = "redis://127.0.0.1:6379"
 
+# =============================================================================
+# Database: PostgreSQL (Primary Event & Projection Store)
+# =============================================================================
+# SpectraFlux standardizes exclusively on PostgreSQL for relational storage.
+# Embedded compile-time migrations in db/migrations/ execute on startup.
+# In 12-factor deployments, DATABASE_URL automatically overrides this setting.
 [database]
+# Localhost / Development:
 url = "postgresql://postgres:password@localhost:5432/spectraflux"
+
+# Production (e.g. Railway private network):
+# url = "postgresql://postgres:postgres_password@postgres.railway.internal:5432/railway"
+
 max_connections = 16
+auto_migrate = true
+
+# =============================================================================
+# Execution Profiles: Sandboxed WASM Pools & Resource Quotas
+# =============================================================================
+# Profiles define memory limits, timeouts, and concurrency pool models.
+# offload:
+#   - "blocking_pool": Runs on Tokio's rayon-like blocking thread pool (for I/O & compute)
+#   - "dedicated_worker": Dedicated OS thread per instance (for long-running batch jobs)
 
 [profiles.standard]
 max_instances = 12
@@ -30,26 +121,92 @@ timeout_ms = 120000
 offload = "blocking_pool"
 
 [profiles.batch]
-max_instances = 1
+max_instances = 2
 max_memory_mb = 128
 timeout_ms = 300000
 offload = "dedicated_worker"
 
+# =============================================================================
+# Static Built-in Fluxcells
+# =============================================================================
+# Pre-packaged, out-of-the-box fluxcells bundled with the appliance.
 [fluxcells.magic_link]
 wasm_module = "fluxcells/magic_link.wasm"
 mount_path = "/auth"
 profile = "extended"
 enabled = true
+subscriptions = ["auth.magic_link", "mutation.requestmagiclink"]
 
 [fluxcells.webhook]
 wasm_module = "fluxcells/webhook.wasm"
 mount_path = "/api/webhooks"
 profile = "extended"
 enabled = true
+subscriptions = ["webhook.dispatch", "mutation.*"]
 
+# =============================================================================
+# Dynamic Fluxcell Deployer Subsystem & Persistent Storage Volume
+# =============================================================================
+# Manages dynamic deployment, upload, hot-swapping, and staging of fluxcell .wasm
+# modules without container rebuilds or restarts.
 [deployer]
 enabled = true
+
+# Fluxcell Binary Storage Directory:
+# Local Development default (relative workspace path):
+storage_dir = "./data/fluxcells"
+
+# Production Persistent Volume (e.g. Railway Persistent Volume mounted at /data):
+# storage_dir = "/data/fluxcells"
+
+# Inbound deployment killswitches:
 external_deploy_enabled = true
 dev_upload_enabled = true
 auto_activate = true
-storage_dir = "fluxcells"
+
+# Security & SSRF Protection:
+# In development, set require_https = false and block_private_networks = false.
+# In production, set require_https = true and block_private_networks = true.
+require_https = false
+block_private_networks = false
+allowed_artifact_hosts = []
+max_wasm_size_bytes = 20971520 # 20 MB
+
+# =============================================================================
+# Resilience & Dead Letter Queue (DLQ)
+# =============================================================================
+# Exponential backoff retry budget for failed fluxcell event handlers.
+[resilience]
+max_retries = 3
+backoff_initial_ms = 200
+backoff_max_ms = 5000
+dlq_enabled = true
+dlq_topic_prefix = "dlq."
+
+# =============================================================================
+# Outbound Transactional Mailer
+# =============================================================================
+# Transactional email service for magic-link OTP tokens, verification, and alerts.
+# Supported providers: "console" (stdout logger), "resend", "mailtrap", "smtp"
+[mailer]
+# Localhost / Development: prints formatted emails to terminal:
+provider = "console"
+from_email = "noreply@example.com"
+from_name = "SpectraFlux System"
+app_name = "SpectraFlux Appliance"
+base_url = "http://localhost:8081"
+
+# Production Resend Provider example:
+# provider = "resend"
+# api_key = "re_your_api_key_here" # Or set via FLUX__MAILER__API_KEY env var
+# from_email = "auth@yourdomain.com"
+# base_url = "https://yourdomain.com"
+
+# Example: Multi-tenant Mailer Profile Override
+# [mailer.tenants.my_tenant]
+# provider = "resend"
+# api_key = "re_tenant_key"
+# from_email = "auth@mytenant.com"
+# from_name = "My Tenant App"
+# app_name = "My Tenant"
+# base_url = "https://mytenant.com"

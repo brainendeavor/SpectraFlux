@@ -38,7 +38,7 @@ RUN ln -s /usr/local/bin/spectraflux /usr/local/bin/spectra-flux && \
     ln -s /usr/local/bin/spectraflux /usr/local/bin/spectral-flux
 
 WORKDIR /etc/spectraflux
-COPY runtime/spectra-flux.toml /etc/spectraflux/spectra-flux.toml
+COPY spectra-flux.toml /etc/spectraflux/spectra-flux.toml
 RUN ln -s /etc/spectraflux/spectra-flux.toml /etc/spectraflux/spectral-flux.toml
 
 # Directory where .wasm fluxcells are mounted or dynamically staged

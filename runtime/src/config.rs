@@ -129,6 +129,7 @@ impl FluxConfig {
             candidates.push(format!("../{}", p));
             candidates.push(format!("../runtime/{}", p));
         }
+
         for candidate in candidates {
             if std::path::Path::new(&candidate).exists() {
                 return Some(candidate);
@@ -142,6 +143,16 @@ impl FluxConfig {
             if let Ok(v) = std::env::var("FLUX_DEPLOYER_ENABLED") {
                 if let Ok(b) = v.parse::<bool>() {
                     cfg.deployer.enabled = b;
+                }
+            }
+            // Deployer storage_dir (Fluxcells volume path) overrides
+            if let Ok(dir) = std::env::var("FLUX_DEPLOYER_STORAGE_DIR")
+                .or_else(|_| std::env::var("FLUX__DEPLOYER__STORAGE_DIR"))
+                .or_else(|_| std::env::var("FLUX_STORAGE_DIR"))
+                .or_else(|_| std::env::var("FLUXCELLS_DIR"))
+            {
+                if !dir.trim().is_empty() {
+                    cfg.deployer.storage_dir = dir;
                 }
             }
             // Standard 12-factor DATABASE_URL fallback (e.g. Railway, Supabase, Neon, Render)
@@ -174,6 +185,40 @@ impl FluxConfig {
             } else if let Ok(valkey_url) = std::env::var("VALKEY_URL") {
                 if !valkey_url.trim().is_empty() {
                     cfg.fluxcell_storage.url = valkey_url;
+                }
+            }
+            // Gateway Admin URL overrides (SPECTRA_ADMIN_URL standard)
+            if let Ok(url) = std::env::var("FLUX_GATEWAY_ADMIN_URL")
+                .or_else(|_| std::env::var("FLUX__GATEWAY_ADMIN_URL"))
+                .or_else(|_| std::env::var("SPECTRA_ADMIN_URL"))
+            {
+                if !url.trim().is_empty() {
+                    cfg.gateway_admin_url = Some(url);
+                }
+            }
+            // Broker overrides
+            if let Ok(m) = std::env::var("FLUX_BROKER_METHOD").or_else(|_| std::env::var("FLUX__BROKER__METHOD")) {
+                if !m.trim().is_empty() {
+                    cfg.broker.method = m;
+                }
+            }
+            if let Ok(a) = std::env::var("FLUX_BROKER_ADDR")
+                .or_else(|_| std::env::var("FLUX__BROKER__ADDR"))
+                .or_else(|_| std::env::var("NATS_URL"))
+            {
+                if !a.trim().is_empty() {
+                    cfg.broker.addr = a;
+                }
+            }
+            // Port and Host overrides
+            if let Ok(p) = std::env::var("FLUX_PORT").or_else(|_| std::env::var("PORT")) {
+                if let Ok(port_num) = p.parse::<u16>() {
+                    cfg.port = port_num;
+                }
+            }
+            if let Ok(h) = std::env::var("FLUX_HOST") {
+                if !h.trim().is_empty() {
+                    cfg.host = h;
                 }
             }
             cfg.sync_storage_tiers();
@@ -881,6 +926,8 @@ pub struct MailerSectionConfig {
 mod tests {
     use super::*;
 
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_config_defaults() {
         let cfg = FluxConfig::default();
@@ -997,6 +1044,7 @@ mod tests {
 
     #[test]
     fn test_env_var_overrides() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         // Use a unique env var to avoid race condition across threads
         unsafe {
             std::env::set_var("FLUX__PORT", "7777");
@@ -1040,7 +1088,10 @@ mod tests {
 
     #[test]
     fn test_storage_tiers_redis_url_fallback() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
+            std::env::remove_var("FLUX_FLUXCELL_STORAGE_URL");
+            std::env::remove_var("FLUX__FLUXCELL_STORAGE__URL");
             std::env::set_var("REDIS_URL", "redis://redis.railway.internal:6379");
         }
         let cfg = FluxConfig::load_from_file("nonexistent.toml").unwrap();
@@ -1250,5 +1301,55 @@ mod tests {
         let hhh = &cfg.mailer.tenants["humanshirehumans"];
         assert_eq!(hhh.provider.as_deref(), Some("mailtrap"));
         assert_eq!(hhh.api_key.as_deref(), Some("mt_live_111222333"));
+    }
+
+    #[test]
+    fn test_fluxcell_storage_and_deployer_paths_in_toml() {
+        let toml_str = r#"
+            [deployer]
+            enabled = true
+            storage_dir = "./data/fluxcells"
+
+            [fluxcell-storage]
+            url = "kevy://./data/fluxcell-storage.kevy"
+
+            [internal-storage]
+            url = "kevy://embedded"
+        "#;
+        let cfg = FluxConfig::from_toml_str(toml_str).unwrap();
+        assert!(cfg.deployer.enabled);
+        assert_eq!(cfg.deployer.storage_dir, "./data/fluxcells");
+        assert_eq!(cfg.fluxcell_storage.url, "kevy://./data/fluxcell-storage.kevy");
+        assert_eq!(cfg.internal_storage.url, "kevy://embedded");
+    }
+
+    #[test]
+    fn test_deployer_storage_dir_env_overrides() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("FLUX_DEPLOYER_STORAGE_DIR", "/tmp/custom-fluxcells");
+            std::env::set_var("FLUX_FLUXCELL_STORAGE_URL", "kevy:///tmp/custom-storage.kevy");
+            std::env::set_var("SPECTRA_ADMIN_URL", "http://127.0.0.1:8000");
+        }
+
+        let cfg = FluxConfig::load_from_file("nonexistent.toml").unwrap();
+        assert_eq!(cfg.deployer.storage_dir, "/tmp/custom-fluxcells");
+        assert_eq!(cfg.fluxcell_storage.url, "kevy:///tmp/custom-storage.kevy");
+        assert_eq!(cfg.gateway_admin_url.as_deref(), Some("http://127.0.0.1:8000"));
+
+        unsafe {
+            std::env::remove_var("FLUX_DEPLOYER_STORAGE_DIR");
+            std::env::remove_var("FLUX_FLUXCELL_STORAGE_URL");
+            std::env::remove_var("SPECTRA_ADMIN_URL");
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_path_standardized() {
+        assert!(FluxConfig::resolve_config_path("spectra-flux.toml").is_some());
+        let test_path = std::env::temp_dir().join("spectra-flux.test-env.toml");
+        std::fs::write(&test_path, "# test").unwrap();
+        assert!(FluxConfig::resolve_config_path(test_path.to_str().unwrap()).is_some());
+        let _ = std::fs::remove_file(test_path);
     }
 }

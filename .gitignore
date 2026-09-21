@@ -12,6 +12,9 @@ assets/concepts/
 
 # Local & App-Specific Configurations
 BUG_FIX_LOG.md
+spectra-flux.*.toml
+*-spectra-flux.toml
+*.local.toml
 *coeval*
 *-local.toml
 *.local
@@ -25,5 +28,9 @@ build/
 fluxcells/fluxcells.json
 fluxcells/*.wasm
 runtime/fluxcells/
+
+# Local data volumes & fluxcells storage
 data/
+/data/
+runtime/data/
 *.kevy

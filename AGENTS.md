@@ -14,7 +14,7 @@ This document outlines the core architectural tenets, invariants, and guidelines
 
 `SpectraFlux` is a public, generic infrastructure appliance and open-source engine framework.
 
-* **Strict Invariant:** Application-specific domain names, application IDs, business schemas, proprietary fluxcell `.wasm` binaries, or application-specific event subscriptions must **NEVER** be hardcoded or committed into `SpectraFlux` repository files (including `runtime/spectra-flux.toml`, Dockerfiles, or default source code).
+* **Strict Invariant:** Application-specific domain names, application IDs, business schemas, proprietary fluxcell `.wasm` binaries, or application-specific event subscriptions must **NEVER** be hardcoded or committed into `SpectraFlux` repository files (including `spectra-flux.toml`, Dockerfiles, or default source code).
 * **Zero-Compiler Container Invariant:** `spectra-flux` runtime containers must NEVER bundle `rustc`, `cargo`, or `git`. Container images must remain ultra-lean (< 25 MB).
 * **Dynamic Deployment Pattern:** Fluxcells are compiled in external CI/CD pipelines or application repositories (such as `OpenCoEval`) and deployed dynamically to the running chassis via the Deployer API:
   `POST /_flux/deployer/upload?name=<name>&mount_path=<path>&auto_activate=true`
