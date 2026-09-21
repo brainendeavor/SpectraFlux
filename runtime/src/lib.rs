@@ -10,3 +10,4 @@ pub mod mailer;
 pub mod storage;
 pub mod telemetry;
 pub mod wasm;
+pub mod runner;

@@ -1,0 +1,391 @@
+use anyhow::{Context, Result};
+use hyper_util::rt::TokioIo;
+use hyper_util::server::conn::auto::Builder as ServerBuilder;
+use crate::broker::create_broker;
+use crate::config::FluxConfig;
+use crate::db::{DatabaseRegistry, PostgresDb};
+use crate::deployer::{DeployerGuard, DeployerRegistry, FluxcellDeployer, FluxcellStatus};
+use crate::http::{FluxRouter, RouteDefinition};
+use crate::storage::create_storage_from_url;
+use crate::telemetry::TelemetryClient;
+use crate::wasm::{CircuitBreakerConfig, FluxcellWasmConfig, WasmHost};
+use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+use tokio::net::TcpListener;
+
+pub async fn start_server(config_override: Option<String>) -> Result<()> {
+    env_logger::init();
+    log::info!("🚀 Initializing SpectraFlux Engine...");
+
+    // 1. Load Configuration:
+    // Precedence:
+    //   1. Explicit CLI argument (-c <path>, --config <path>, or positional path)
+    //   2. Environment variable: FLUX_CONFIG (sole supported configuration ENV VAR)
+    //   3. Default: spectra-flux.toml
+    let config_path = config_override
+        .or_else(|| std::env::var("FLUX_CONFIG").ok())
+        .unwrap_or_else(|| "spectra-flux.toml".to_string());
+
+    let (config, resolved_config_path) = match FluxConfig::load_from_file_with_source(&config_path) {
+        Ok(res) => {
+            log::info!("Loaded configuration from '{}'", res.1);
+            res
+        }
+        Err(e) => {
+            log::warn!("Could not load '{}' ({}). Falling back to default configuration.", config_path, e);
+            (FluxConfig::default_local(), "built-in default (in-memory)".to_string())
+        }
+    };
+
+    let config_summary = Arc::new(config.to_sanitized_json(&resolved_config_path));
+
+    let raw_toml = if std::path::Path::new(&resolved_config_path).exists() {
+        std::fs::read_to_string(&resolved_config_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let dynamic_state = Arc::new(arc_swap::ArcSwap::new(Arc::new(
+        crate::dynamic_state::DynamicChassisState::new(
+            config.clone(),
+            raw_toml,
+            resolved_config_path.clone(),
+            1,
+        ),
+    )));
+
+    let worker_id = format!("spectra-flux-{}", uuid::Uuid::now_v7());
+    log::info!("Instance Worker ID: {}", worker_id);
+
+    // 2. Initialize Telemetry Client
+    let telemetry = Arc::new(TelemetryClient::new(
+        worker_id.clone(),
+        config.broker.method.clone(),
+        config.broker.stream.clone(),
+        200,
+    ));
+
+    telemetry.record_log("INFO", "SpectraFlux engine initializing", None);
+
+    // Start heartbeat reporter if gateway admin URL configured
+    let stop_signal = Arc::new(AtomicBool::new(false));
+    if let Some(admin_url) = &config.gateway_admin_url {
+        log::info!("Configuring telemetry heartbeat to Gateway at '{}'...", admin_url);
+        telemetry.clone().start_heartbeat_task(
+            admin_url.clone(),
+            Duration::from_secs(3),
+            stop_signal.clone(),
+        );
+    }
+
+    // 3. Initialize Decoupled Storage Tiers
+    log::info!("Initializing internal storage from '{}'...", config.internal_storage.url);
+    let internal_storage = create_storage_from_url(&config.internal_storage.url)
+        .await
+        .context("Failed to initialize internal storage engine")?;
+    telemetry.record_log("INFO", &format!("Internal storage '{}' ready", config.internal_storage.url), None);
+
+    log::info!("Initializing fluxcell storage from '{}'...", config.fluxcell_storage.url);
+    let fluxcell_storage = create_storage_from_url(&config.fluxcell_storage.url)
+        .await
+        .context("Failed to initialize fluxcell storage engine")?;
+    telemetry.record_log("INFO", &format!("Fluxcell storage '{}' ready", config.fluxcell_storage.url), None);
+
+    let trace_storage = Arc::new(crate::telemetry::DomainTraceStorage::new(internal_storage.clone()));
+
+    // 3.5. Initialize Database Registry
+    let mut db_registry = DatabaseRegistry::new();
+    for (name, db_cfg) in &config.databases {
+        log::info!("Connecting to database '{}'...", name);
+        match PostgresDb::new(&db_cfg.url, db_cfg.max_connections) {
+            Ok(db) => {
+                if db_cfg.auto_migrate {
+                    if let Err(e) = db.run_migrations().await {
+                        log::warn!("Failed to auto-run dbmate migrations for database '{}': {:#}", name, e);
+                    }
+                }
+                let is_default = name == "default";
+                db_registry.register(name, Arc::new(db), is_default);
+                log::info!("Database '{}' registered", name);
+            }
+            Err(e) => {
+                log::warn!("Failed to initialize database '{}': {:#}", name, e);
+            }
+        }
+    }
+    if db_registry.is_empty() {
+        if let Some(db_url) = &config.database.url {
+            match PostgresDb::new(db_url, config.database.max_connections) {
+                Ok(db) => {
+                    if config.database.auto_migrate {
+                        if let Err(e) = db.run_migrations().await {
+                            log::warn!("Failed to auto-run dbmate migrations for default database: {:#}", e);
+                        }
+                    }
+                    db_registry.register("default", Arc::new(db), true);
+                    log::info!("Registered default database from config.database");
+                }
+                Err(e) => {
+                    log::warn!("Failed to initialize default database: {:#}", e);
+                }
+            }
+        }
+    }
+
+    // 4. Initialize WASM Host
+    log::info!("Initializing Wasmtime Host Engine with epoch interruption...");
+    let wasm_host = Arc::new(
+        WasmHost::with_dual_storage(
+            5,
+            Some(internal_storage.clone()),
+            Some(fluxcell_storage.clone()),
+            Some(Arc::new(db_registry)),
+        )
+        .context("Failed to initialize WASM host engine")?,
+    );
+
+    // 5. Build Router & Load Configured Fluxcells
+    let mut router = FluxRouter::new();
+
+    for (name, cell_cfg) in &config.fluxcells {
+        if !cell_cfg.enabled {
+            log::info!("Fluxcell '{}' is disabled, skipping.", name);
+            continue;
+        }
+
+        log::info!("Loading fluxcell '{}' mounted at '{}'...", name, cell_cfg.mount_path);
+
+        // Check if wasm module file exists
+        if std::path::Path::new(&cell_cfg.wasm_module).exists() {
+            let bytes = std::fs::read(&cell_cfg.wasm_module)
+                .with_context(|| format!("Failed to read WASM module '{}'", cell_cfg.wasm_module))?;
+
+            let resolved = config.resolve_cell_execution(name, cell_cfg, None, None, None)?;
+            let wasm_cfg = FluxcellWasmConfig {
+                profile: resolved.profile,
+                timeout_ms: resolved.timeout_ms,
+                max_memory_bytes: resolved.max_memory_bytes,
+                max_instances: resolved.max_instances,
+                offload: resolved.offload,
+                circuit_breaker: CircuitBreakerConfig::default(),
+            };
+
+            wasm_host
+                .register_wasm_bytes_with_subs(
+                    name,
+                    &bytes,
+                    wasm_cfg,
+                    cell_cfg.subscriptions.clone(),
+                )
+                .with_context(|| format!("Failed to register WASM module '{}'", cell_cfg.wasm_module))?;
+
+            let mut routes = wasm_host.get_fluxcell_routes(name).unwrap_or_default();
+            if routes.is_empty() {
+                routes = match name.as_str() {
+                    "magic_link" | "magic-link" => vec![
+                        RouteDefinition::new("GET", "/verify", "Verify magic link token"),
+                        RouteDefinition::new("POST", "/verify", "Redeem magic link token"),
+                        RouteDefinition::new("GET", "/status", "Auth service status"),
+                        RouteDefinition::new("GET", "/.well-known/jwks.json", "OIDC JSON Web Key Set"),
+                        RouteDefinition::new("GET", "/.well-known/openid-configuration", "OIDC Discovery document"),
+                    ],
+                    "webhook" => vec![
+                        RouteDefinition::new("POST", "/dispatch", "Dispatch outbound webhook"),
+                        RouteDefinition::new("GET", "/health", "Webhook health check"),
+                    ],
+                    _ => vec![],
+                };
+            }
+
+            if !routes.is_empty() {
+                router.register_fluxcell_routes(name, &cell_cfg.mount_path, &routes)?;
+                telemetry.record_log(
+                    "INFO",
+                    &format!("✨ Fluxcell '{}' is ALIVE: mounted at '{}' with {} route(s)", name, cell_cfg.mount_path, routes.len()),
+                    None,
+                );
+            }
+        } else {
+            // Built-in fallback routes if wasm module file doesn't exist yet
+            let builtin_routes = match name.as_str() {
+                "magic_link" | "magic-link" => vec![
+                    RouteDefinition::new("GET", "/verify", "Verify magic link token"),
+                    RouteDefinition::new("POST", "/verify", "Redeem magic link token"),
+                    RouteDefinition::new("GET", "/status", "Auth service status"),
+                    RouteDefinition::new("GET", "/.well-known/jwks.json", "OIDC JSON Web Key Set"),
+                    RouteDefinition::new("GET", "/.well-known/openid-configuration", "OIDC Discovery document"),
+                ],
+                "webhook" => vec![
+                    RouteDefinition::new("POST", "/dispatch", "Dispatch outbound webhook"),
+                    RouteDefinition::new("GET", "/health", "Webhook health check"),
+                ],
+                _ => vec![],
+            };
+
+            if !builtin_routes.is_empty() {
+                log::info!("WASM module '{}' not found, registering built-in routes for '{}'", cell_cfg.wasm_module, name);
+                router.register_fluxcell_routes(name, &cell_cfg.mount_path, &builtin_routes)?;
+                telemetry.record_log(
+                    "INFO",
+                    &format!("✨ Fluxcell '{}' is ALIVE: mounted at '{}' with {} built-in route(s)", name, cell_cfg.mount_path, builtin_routes.len()),
+                    None,
+                );
+            }
+        }
+    }
+
+    let shared_router = Arc::new(RwLock::new(router));
+
+    // 6. Initialize Deployer Subsystem (if enabled)
+    let deployer: Option<Arc<FluxcellDeployer>> = if config.deployer.enabled {
+        log::info!("Initializing Fluxcell Deployer subsystem (storage: {:?})...", config.deployer.storage_dir);
+        let guard = Arc::new(DeployerGuard::new(
+            config.deployer.external_deploy_enabled,
+            config.deployer.dev_upload_enabled,
+        ));
+        let registry = Arc::new(DeployerRegistry::new(&config.deployer.storage_dir)?);
+        let dep = Arc::new(FluxcellDeployer::new(
+            config.deployer.clone(),
+            guard,
+            registry.clone(),
+            wasm_host.clone(),
+            shared_router.clone(),
+        ));
+
+        // Boot-load persisted active cells from fluxcells.json
+        let persisted = registry.list_records();
+        for record in persisted {
+            if record.status == FluxcellStatus::Active {
+                let wasm_file = registry.storage_dir().join(&record.wasm_file);
+                if wasm_file.exists() {
+                    match std::fs::read(&wasm_file) {
+                        Ok(bytes) => {
+                            let wasm_cfg = FluxcellWasmConfig {
+                                profile: record.profile.clone(),
+                                timeout_ms: record.timeout_ms,
+                                max_memory_bytes: record.max_memory_bytes,
+                                max_instances: record.max_instances,
+                                offload: record.offload,
+                                circuit_breaker: CircuitBreakerConfig::default(),
+                            };
+                            if let Err(e) = wasm_host.register_wasm_bytes(&record.name, &bytes, wasm_cfg) {
+                                log::error!("Failed to register persisted fluxcell '{}': {}", record.name, e);
+                            } else {
+                                let mut router_lock = shared_router.write().unwrap_or_else(|e| e.into_inner());
+                                if let Err(e) = router_lock.register_fluxcell_routes(&record.name, &record.mount_path, &record.routes) {
+                                    log::error!("Failed to mount routes for persisted fluxcell '{}': {}", record.name, e);
+                                } else {
+                                    log::info!("✨ Restored active fluxcell '{}' mounted at '{}'", record.name, record.mount_path);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to read persisted wasm file {:?}: {}", wasm_file, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        Some(dep)
+    } else {
+        None
+    };
+
+    // 7. Connect Broker Consumer Loop
+    log::info!("Connecting to broker '{}' at '{}'...", config.broker.method, config.broker.addr);
+    match create_broker(&config.broker).await {
+        Ok(broker) => {
+            let subjects = vec![
+                "mutation.>".to_string(),
+                "webhook.>".to_string(),
+                "auth.>".to_string(),
+                "deployer.>".to_string(),
+            ];
+            let group = config.broker.consumer_group.clone();
+            let processor = Arc::new(
+                crate::broker::EventProcessor::new(
+                    broker,
+                    wasm_host.clone(),
+                    telemetry.clone(),
+                    internal_storage.clone(),
+                    deployer.clone(),
+                    Some(trace_storage.clone()),
+                    config.resilience.clone(),
+                    worker_id.clone(),
+                )
+                .with_dynamic_state(dynamic_state.clone()),
+            );
+            processor.spawn_consumer_loop(subjects, group);
+        }
+        Err(e) => {
+            log::warn!("Broker connection failed: {}. Continuing in standalone API mode.", e);
+        }
+    }
+
+    // 8. Start HTTP Server
+    let addr = SocketAddr::new(config.host.parse()?, config.port);
+    let listener = TcpListener::bind(addr).await?;
+    log::info!("HTTP server listening on http://{}", addr);
+
+    let router_arc = shared_router.clone();
+    let tele_arc = telemetry.clone();
+    let wasm_dispatcher = wasm_host.clone();
+    let deployer_arc = deployer.clone();
+    let trace_storage_arc = trace_storage.clone();
+    let config_summary_arc = config_summary.clone();
+    let dynamic_state_arc = dynamic_state.clone();
+
+    tokio::select! {
+        res = async {
+            loop {
+                let (stream, _) = listener.accept().await?;
+                let io = TokioIo::new(stream);
+                let router_clone = router_arc.clone();
+                let tele_clone = tele_arc.clone();
+                let dispatcher_clone = wasm_dispatcher.clone();
+                let deployer_clone = deployer_arc.clone();
+                let trace_storage_clone = trace_storage_arc.clone();
+                let config_summary_clone = config_summary_arc.clone();
+                let dynamic_state_clone = dynamic_state_arc.clone();
+
+                tokio::spawn(async move {
+                    let service = hyper::service::service_fn(move |req| {
+                        crate::http::handle_request_with_dynamic_state(
+                            req,
+                            router_clone.clone(),
+                            tele_clone.clone(),
+                            dispatcher_clone.clone(),
+                            deployer_clone.clone(),
+                            Some(trace_storage_clone.clone()),
+                            Some(config_summary_clone.clone()),
+                            Some(dynamic_state_clone.clone()),
+                        )
+                    });
+
+                    if let Err(err) = ServerBuilder::new(hyper_util::rt::TokioExecutor::new())
+                        .serve_connection(io, service)
+                        .await
+                    {
+                        log::debug!("HTTP connection closed: {:?}", err);
+                    }
+                });
+            }
+            #[allow(unreachable_code)]
+            Ok::<(), anyhow::Error>(())
+        } => {
+            if let Err(e) = res {
+                log::error!("Server accept loop error: {:?}", e);
+            }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            log::info!("Shutting down SpectraFlux Engine gracefully...");
+            stop_signal.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    log::info!("SpectraFlux Engine shutdown complete.");
+    Ok(())
+}
