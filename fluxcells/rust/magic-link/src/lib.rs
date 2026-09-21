@@ -43,6 +43,33 @@ pub struct VerifyResponse {
     pub redirect_uri: Option<String>,
 }
 
+/// Request to link an external OIDC identity provider (LinkedIn, Google, GitHub)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LinkIdentityRequest {
+    pub user_id: Option<String>,
+    pub email: String,
+    pub provider: String,
+    pub provider_sub: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub hlc: Option<String>,
+}
+
+/// Response returned upon linking an external OIDC identity
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LinkIdentityResponse {
+    pub status: String,
+    pub email: String,
+    pub provider: String,
+    pub provider_sub: String,
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
 /// Mints a cryptographically secure 256-bit token (64 hex characters)
 pub fn mint_magic_token(email: &str) -> String {
     let mut hasher = Sha256::new();
@@ -253,6 +280,7 @@ pub fn get_subscriptions() -> Vec<String> {
     vec![
         "auth.magic_link".to_string(),
         "mutation.requestmagiclink".to_string(),
+        "mutation.auth.link_identity".to_string(),
     ]
 }
 
@@ -267,6 +295,11 @@ pub fn get_routes() -> Vec<MagicLinkRoute> {
             method: "POST".to_string(),
             path: "/verify".to_string(),
             description: "API redemption of magic link token".to_string(),
+        },
+        MagicLinkRoute {
+            method: "POST".to_string(),
+            path: "/identity/link".to_string(),
+            description: "Link external OIDC identity provider claims".to_string(),
         },
         MagicLinkRoute {
             method: "GET".to_string(),
@@ -284,6 +317,40 @@ pub fn get_routes() -> Vec<MagicLinkRoute> {
             description: "OIDC OpenID Connect discovery document".to_string(),
         },
     ]
+}
+
+/// Processes an external OIDC identity linking request, validating parameters and minting an authenticated session
+pub fn process_link_identity(
+    req: &LinkIdentityRequest,
+    jwt_secret: Option<&[u8]>,
+) -> Result<LinkIdentityResponse, String> {
+    if !req.email.contains('@') {
+        return Err("Invalid email address".to_string());
+    }
+    if req.provider.trim().is_empty() || req.provider_sub.trim().is_empty() {
+        return Err("Provider and provider_sub are required".to_string());
+    }
+
+    let session_id = format!("sess-oidc-{}", Uuid::now_v7());
+    let token = jwt_secret.map(|sec| {
+        mint_auth_jwt_hs256(
+            &req.provider_sub,
+            &req.email,
+            &["member"],
+            None,
+            sec,
+            86400 * 7,
+        )
+    });
+
+    Ok(LinkIdentityResponse {
+        status: "LINKED".to_string(),
+        email: req.email.clone(),
+        provider: req.provider.clone(),
+        provider_sub: req.provider_sub.clone(),
+        session_id,
+        token,
+    })
 }
 
 /// Mints a standard HS256 JWT containing OIDC claims.
@@ -439,9 +506,11 @@ mod tests {
 
     #[test]
     fn test_routes_and_subscriptions() {
-        assert_eq!(get_subscriptions().len(), 2);
+        assert_eq!(get_subscriptions().len(), 3);
+        assert!(get_subscriptions().contains(&"mutation.auth.link_identity".to_string()));
         let routes = get_routes();
-        assert_eq!(routes.len(), 5);
+        assert_eq!(routes.len(), 6);
+        assert!(routes.iter().any(|r| r.path == "/identity/link"));
         assert!(routes.iter().any(|r| r.path == "/.well-known/jwks.json"));
         assert!(routes.iter().any(|r| r.path == "/.well-known/openid-configuration"));
     }
@@ -574,7 +643,43 @@ mod tests {
         assert_eq!(oidc_cfg["issuer"], "https://auth.example.com");
         assert_eq!(oidc_cfg["jwks_uri"], "https://auth.example.com/auth/.well-known/jwks.json");
 
-        assert_eq!(get_routes().len(), 5);
+        assert_eq!(get_routes().len(), 6);
+    }
+
+    #[test]
+    fn test_process_link_identity() {
+        let req = LinkIdentityRequest {
+            user_id: Some("user_123".to_string()),
+            email: "elena@dfci.harvard.edu".to_string(),
+            provider: "linkedin".to_string(),
+            provider_sub: "sub_linkedin_998877".to_string(),
+            display_name: Some("Dr. Elena Vance".to_string()),
+            avatar_url: Some("https://example.com/avatar.png".to_string()),
+            hlc: Some("1710000000.000001".to_string()),
+        };
+
+        let secret = b"secret_key_for_magic_link_jwt";
+        let res = process_link_identity(&req, Some(secret)).expect("Must succeed");
+
+        assert_eq!(res.status, "LINKED");
+        assert_eq!(res.email, "elena@dfci.harvard.edu");
+        assert_eq!(res.provider, "linkedin");
+        assert_eq!(res.provider_sub, "sub_linkedin_998877");
+        assert!(res.session_id.starts_with("sess-oidc-"));
+        assert!(res.token.is_some());
+
+        // Test validation failures
+        let bad_email = LinkIdentityRequest {
+            email: "not-an-email".to_string(),
+            ..req.clone()
+        };
+        assert!(process_link_identity(&bad_email, None).is_err());
+
+        let missing_provider = LinkIdentityRequest {
+            provider: "".to_string(),
+            ..req.clone()
+        };
+        assert!(process_link_identity(&missing_provider, None).is_err());
     }
 }
 
