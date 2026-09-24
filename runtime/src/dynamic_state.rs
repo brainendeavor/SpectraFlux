@@ -79,10 +79,10 @@ mod tests {
             api_key = "re_test_key"
             from_email = "root@example.com"
 
-            [mailer.tenants.coeval]
+            [mailer.tenants.tenant_alpha]
             provider = "resend"
-            api_key = "re_coeval_key"
-            from_email = "auth@coeval.bio"
+            api_key = "re_tenant_alpha_key"
+            from_email = "auth@tenant-alpha.example.com"
         "#;
 
         let state = DynamicChassisState::new_from_toml(
@@ -96,8 +96,8 @@ mod tests {
         assert_eq!(state.config.port, 8085);
         assert!(!state.config_hash.is_empty());
 
-        let coeval_cfg = state.mailer_registry.get_config(Some("coeval"));
-        assert_eq!(coeval_cfg.from_email, "auth@coeval.bio");
+        let alpha_cfg = state.mailer_registry.get_config(Some("tenant_alpha"));
+        assert_eq!(alpha_cfg.from_email, "auth@tenant-alpha.example.com");
 
         let default_cfg = state.mailer_registry.get_config(None);
         assert_eq!(default_cfg.from_email, "root@example.com");

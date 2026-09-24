@@ -580,27 +580,27 @@ mod tests {
     #[test]
     fn test_render_email_templates_branded_with_code_and_logo() {
         let branding = EmailBranding {
-            app_name: "Open CoEval".to_string(),
-            logo_url: Some("https://opencoeval.bio/public/images/logo.png".to_string()),
+            app_name: "Acme Cloud".to_string(),
+            logo_url: Some("https://example.com/public/images/logo.png".to_string()),
             accent_color: Some("#fa48c5".to_string()),
-            support_email: Some("support@opencoeval.bio".to_string()),
+            support_email: Some("support@example.com".to_string()),
         };
 
         let rendered = render_email_templates_branded(
             "alice@example.com",
-            "https://opencoeval.bio/auth/verify?token=tok-123",
+            "https://example.com/auth/verify?token=tok-123",
             Some("482910"),
             Some(&branding),
         );
 
-        assert_eq!(rendered.subject, "Open CoEval - Your Sign-In Code is 482910");
-        assert!(rendered.html_body.contains("Open CoEval Sign In"));
-        assert!(rendered.html_body.contains("https://opencoeval.bio/public/images/logo.png"));
+        assert_eq!(rendered.subject, "Acme Cloud - Your Sign-In Code is 482910");
+        assert!(rendered.html_body.contains("Acme Cloud Sign In"));
+        assert!(rendered.html_body.contains("https://example.com/public/images/logo.png"));
         assert!(rendered.html_body.contains("#fa48c5"));
         assert!(rendered.html_body.contains("482910"));
         assert!(rendered.html_body.contains("Or Click Here to Sign In Directly"));
         assert!(rendered.text_body.contains("Your verification code is: 482910"));
-        assert!(rendered.text_body.contains("Open CoEval Sign In"));
+        assert!(rendered.text_body.contains("Acme Cloud Sign In"));
     }
 
     #[test]
@@ -632,7 +632,7 @@ mod tests {
             "usr_alice",
             "alice@example.com",
             &["editor", "admin"],
-            Some("tenant_coeval"),
+            Some("tenant_acme"),
             secret,
             3600,
         );

@@ -2105,7 +2105,7 @@ mod tests {
           (func (export "allocate") (param i32) (result i32) i32.const 1024)
           (func (export "deallocate") (param i32 i32))
           (func (export "get_subscriptions") (result i64)
-            ;; Write JSON string: ["mutation.coeval.recordvote","mutation.*"]
+            ;; Write JSON string: ["mutation.>"]
             (i32.store8 (i32.const 1024) (i32.const 91))  ;; '['
             (i32.store8 (i32.const 1025) (i32.const 34))  ;; '"'
             (i32.store8 (i32.const 1026) (i32.const 109)) ;; 'm'
@@ -2152,7 +2152,7 @@ mod tests {
         let subs = host.get_fluxcell_subscriptions("event-cell").unwrap();
         assert_eq!(subs, vec!["mutation.>"]);
 
-        let matching = host.find_subscribed_fluxcells("mutation.coeval.recordvote");
+        let matching = host.find_subscribed_fluxcells("mutation.orders.create");
         assert_eq!(matching, vec!["event-cell"]);
 
         let non_matching = host.find_subscribed_fluxcells("billing.invoice");

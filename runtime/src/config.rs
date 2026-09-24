@@ -1273,34 +1273,34 @@ mod tests {
             from_name = "Base System"
             base_url = "https://base.example.com"
 
-            [mailer.tenants.coeval]
+            [mailer.tenants.tenant_a]
             provider = "resend"
             api_key = "re_live_999888777"
-            from_email = "auth@coeval.bio"
-            from_name = "CoEval Biological"
-            app_name = "CoEval"
-            base_url = "https://coeval.bio"
+            from_email = "auth@tenant-a.example.com"
+            from_name = "Tenant A System"
+            app_name = "Tenant A"
+            base_url = "https://tenant-a.example.com"
 
-            [mailer.tenants.humanshirehumans]
+            [mailer.tenants.tenant_b]
             provider = "mailtrap"
             api_key = "mt_live_111222333"
-            from_email = "auth@humanshirehumans.com"
-            from_name = "Humans Hire Humans"
+            from_email = "auth@tenant-b.example.com"
+            from_name = "Tenant B System"
         "#;
         let cfg = FluxConfig::from_toml_str(toml_str).unwrap();
         assert_eq!(cfg.mailer.provider.as_deref(), Some("console"));
         assert_eq!(cfg.mailer.from_email.as_deref(), Some("base@example.com"));
         assert_eq!(cfg.mailer.tenants.len(), 2);
 
-        let coeval = &cfg.mailer.tenants["coeval"];
-        assert_eq!(coeval.provider.as_deref(), Some("resend"));
-        assert_eq!(coeval.api_key.as_deref(), Some("re_live_999888777"));
-        assert_eq!(coeval.from_email.as_deref(), Some("auth@coeval.bio"));
-        assert_eq!(coeval.base_url.as_deref(), Some("https://coeval.bio"));
+        let tenant_a = &cfg.mailer.tenants["tenant_a"];
+        assert_eq!(tenant_a.provider.as_deref(), Some("resend"));
+        assert_eq!(tenant_a.api_key.as_deref(), Some("re_live_999888777"));
+        assert_eq!(tenant_a.from_email.as_deref(), Some("auth@tenant-a.example.com"));
+        assert_eq!(tenant_a.base_url.as_deref(), Some("https://tenant-a.example.com"));
 
-        let hhh = &cfg.mailer.tenants["humanshirehumans"];
-        assert_eq!(hhh.provider.as_deref(), Some("mailtrap"));
-        assert_eq!(hhh.api_key.as_deref(), Some("mt_live_111222333"));
+        let tenant_b = &cfg.mailer.tenants["tenant_b"];
+        assert_eq!(tenant_b.provider.as_deref(), Some("mailtrap"));
+        assert_eq!(tenant_b.api_key.as_deref(), Some("mt_live_111222333"));
     }
 
     #[test]

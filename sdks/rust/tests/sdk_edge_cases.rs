@@ -10,7 +10,7 @@ fn test_event_context_parsing_edge_cases() {
     // 1. Valid JSON payload with full metadata
     let payload = json!({
         "id": "evt-12345",
-        "topic": "mutation.coeval.recordvote",
+        "topic": "mutation.orders.createOrder",
         "hlc": "1726000000000-0001",
         "data": { "voter": "alice", "vote": 1 }
     });
@@ -18,7 +18,7 @@ fn test_event_context_parsing_edge_cases() {
     let ctx = EventContext::from_bytes(&bytes);
 
     assert_eq!(ctx.event_id, "evt-12345");
-    assert_eq!(ctx.topic, "mutation.coeval.recordvote");
+    assert_eq!(ctx.topic, "mutation.orders.createOrder");
     assert_eq!(ctx.hlc, "1726000000000-0001");
 
     #[derive(serde::Deserialize)]

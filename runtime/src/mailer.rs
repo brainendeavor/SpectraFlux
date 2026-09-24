@@ -742,23 +742,23 @@ mod tests {
         section.from_email = Some("default@example.com".to_string());
         section.from_name = Some("Default Service".to_string());
 
-        let mut tenant_coeval = crate::config::MailerTenantConfig::default();
-        tenant_coeval.provider = Some("resend".to_string());
-        tenant_coeval.api_key = Some("re_coeval_secret_key_1234".to_string());
-        tenant_coeval.from_email = Some("auth@coeval.bio".to_string());
-        tenant_coeval.from_name = Some("CoEval Research".to_string());
-        tenant_coeval.app_name = Some("CoEval".to_string());
-        tenant_coeval.base_url = Some("https://coeval.bio".to_string());
+        let mut tenant_alpha = crate::config::MailerTenantConfig::default();
+        tenant_alpha.provider = Some("resend".to_string());
+        tenant_alpha.api_key = Some("re_mock_secret_key_1234".to_string());
+        tenant_alpha.from_email = Some("auth@tenant-alpha.example.com".to_string());
+        tenant_alpha.from_name = Some("Tenant Alpha System".to_string());
+        tenant_alpha.app_name = Some("Tenant Alpha".to_string());
+        tenant_alpha.base_url = Some("https://tenant-alpha.example.com".to_string());
 
-        let mut tenant_hhh = crate::config::MailerTenantConfig::default();
-        tenant_hhh.provider = Some("mailtrap".to_string());
-        tenant_hhh.api_key = Some("mt_hhh_secret_token_5678".to_string());
-        tenant_hhh.from_email = Some("auth@humanshirehumans.com".to_string());
-        tenant_hhh.from_name = Some("Humans Hire Humans".to_string());
-        tenant_hhh.app_name = Some("Humans Hire Humans".to_string());
+        let mut tenant_beta = crate::config::MailerTenantConfig::default();
+        tenant_beta.provider = Some("mailtrap".to_string());
+        tenant_beta.api_key = Some("mt_mock_secret_token_5678".to_string());
+        tenant_beta.from_email = Some("auth@tenant-beta.example.com".to_string());
+        tenant_beta.from_name = Some("Tenant Beta System".to_string());
+        tenant_beta.app_name = Some("Tenant Beta".to_string());
 
-        section.tenants.insert("coeval".to_string(), tenant_coeval);
-        section.tenants.insert("humanshirehumans".to_string(), tenant_hhh);
+        section.tenants.insert("tenant_alpha".to_string(), tenant_alpha);
+        section.tenants.insert("tenant_beta".to_string(), tenant_beta);
 
         let registry = MailerRegistry::from_config(&section);
 
@@ -771,30 +771,30 @@ mod tests {
         let unmapped = registry.get_config(Some("unknown_tenant"));
         assert_eq!(unmapped.provider, MailerProvider::Console);
 
-        // Check coeval tenant resolution
-        let coeval = registry.get_config(Some("coeval"));
-        assert_eq!(coeval.provider, MailerProvider::Resend);
-        assert_eq!(coeval.from_email, "auth@coeval.bio");
-        assert_eq!(coeval.from_name, "CoEval Research");
-        assert_eq!(coeval.base_url, "https://coeval.bio");
+        // Check tenant_alpha resolution
+        let alpha = registry.get_config(Some("tenant_alpha"));
+        assert_eq!(alpha.provider, MailerProvider::Resend);
+        assert_eq!(alpha.from_email, "auth@tenant-alpha.example.com");
+        assert_eq!(alpha.from_name, "Tenant Alpha System");
+        assert_eq!(alpha.base_url, "https://tenant-alpha.example.com");
 
         // Case-insensitivity check
-        let coeval_caps = registry.get_config(Some("CoEval"));
-        assert_eq!(coeval_caps.provider, MailerProvider::Resend);
+        let alpha_caps = registry.get_config(Some("Tenant_Alpha"));
+        assert_eq!(alpha_caps.provider, MailerProvider::Resend);
 
-        // Check humanshirehumans tenant resolution
-        let hhh = registry.get_config(Some("humanshirehumans"));
-        assert_eq!(hhh.provider, MailerProvider::Mailtrap);
-        assert_eq!(hhh.from_email, "auth@humanshirehumans.com");
+        // Check tenant_beta resolution
+        let beta = registry.get_config(Some("tenant_beta"));
+        assert_eq!(beta.provider, MailerProvider::Mailtrap);
+        assert_eq!(beta.from_email, "auth@tenant-beta.example.com");
 
         // Sanitized JSON verification
         let sanitized = registry.to_sanitized_json();
         assert_eq!(sanitized["provider"], "console");
         assert_eq!(sanitized["tenantsCount"], 2);
-        assert!(sanitized["tenants"]["coeval"].is_object());
-        assert_eq!(sanitized["tenants"]["coeval"]["provider"], "resend");
-        assert_eq!(sanitized["tenants"]["coeval"]["fromEmail"], "auth@coeval.bio");
-        assert_eq!(sanitized["tenants"]["coeval"]["apiKeyMasked"], "re_c••••1234");
+        assert!(sanitized["tenants"]["tenant_alpha"].is_object());
+        assert_eq!(sanitized["tenants"]["tenant_alpha"]["provider"], "resend");
+        assert_eq!(sanitized["tenants"]["tenant_alpha"]["fromEmail"], "auth@tenant-alpha.example.com");
+        assert_eq!(sanitized["tenants"]["tenant_alpha"]["apiKeyMasked"], "re_m••••1234");
         assert!(!sanitized.to_string().contains("secret_key"));
     }
 }

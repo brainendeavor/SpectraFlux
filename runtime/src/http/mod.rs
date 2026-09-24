@@ -1522,12 +1522,12 @@ mod tests {
             [mailer]
             provider = "console"
 
-            [mailer.tenants.coeval]
+            [mailer.tenants.tenant_alpha]
             provider = "resend"
             api_key = "re_live_secret"
-            from_email = "auth@coeval.bio"
-            from_name = "CoEval"
-            app_name = "CoEval"
+            from_email = "auth@tenant-alpha.example.com"
+            from_name = "Tenant Alpha"
+            app_name = "Tenant Alpha"
         "#;
 
         let validate_req = Request::builder()
@@ -1615,12 +1615,12 @@ mod tests {
         let current_state = dynamic_state.load();
         assert_eq!(current_state.version, 2);
         assert_eq!(current_state.config.port, 8090);
-        let coeval_cfg = current_state.mailer_registry.get_config(Some("coeval"));
-        assert_eq!(coeval_cfg.from_email, "auth@coeval.bio");
+        let alpha_cfg = current_state.mailer_registry.get_config(Some("tenant_alpha"));
+        assert_eq!(alpha_cfg.from_email, "auth@tenant-alpha.example.com");
 
         // Verify written to disk
         let disk_content = std::fs::read_to_string(&test_config_path).unwrap();
-        assert!(disk_content.contains("auth@coeval.bio"));
+        assert!(disk_content.contains("auth@tenant-alpha.example.com"));
 
         // 5. Test POST /admin/api/v1/config/reload (reload from disk)
         let reload_req = Request::builder()

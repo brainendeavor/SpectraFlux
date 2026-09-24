@@ -46,7 +46,7 @@ fn default_queue_ingress() -> String {
 pub struct DomainOperationTrace {
     pub command_id: String,      // Monotonic UUIDv7 from SpectraGQL
     pub hlc: String,             // Hybrid Logical Clock timestamp
-    pub topic: String,           // Event topic e.g. "mutation.coeval.createInterview" or "http:POST /votes/mutate"
+    pub topic: String,           // Event topic e.g. "mutation.orders.createOrder" or "http:POST /orders/mutate"
     pub operation_name: String,  // Operation name e.g. "createInterview"
     #[serde(default = "default_queue_ingress")]
     pub ingress: String,         // "HTTP" or "QUEUE"
@@ -210,24 +210,24 @@ mod tests {
         let trace = DomainOperationTrace {
             command_id: "018f3a2b-7c4d-7a8e-9012-3456789abcde".to_string(),
             hlc: "1710600000000:1".to_string(),
-            topic: "mutation.coeval.createInterview".to_string(),
-            operation_name: "createInterview".to_string(),
+            topic: "mutation.orders.createOrder".to_string(),
+            operation_name: "createOrder".to_string(),
             ingress: "QUEUE".to_string(),
             worker_id: "spectra-flux-worker-1".to_string(),
             status: "completed".to_string(),
             total_duration_ms: 12.45,
             started_at: "2026-09-16T12:00:00Z".to_string(),
             completed_at: "2026-09-16T12:00:00.012Z".to_string(),
-            initial_input: serde_json::json!({ "candidateId": "cand-42", "jobId": "eng-101" }),
+            initial_input: serde_json::json!({ "orderId": "ord-42", "customerId": "cust-101" }),
             steps: vec![
                 FluxcellStepSpan {
-                    fluxcell_name: "interview-orchestrator".to_string(),
-                    topic: "mutation.coeval.createInterview".to_string(),
+                    fluxcell_name: "order-orchestrator".to_string(),
+                    topic: "mutation.orders.createOrder".to_string(),
                     function_name: "handle_event".to_string(),
                     start_time: "2026-09-16T12:00:00.001Z".to_string(),
                     duration_ms: 8.2,
                     status: "ok".to_string(),
-                    input_preview: Some(serde_json::json!({ "candidateId": "cand-42" })),
+                    input_preview: Some(serde_json::json!({ "orderId": "ord-42" })),
                     output_preview: Some(serde_json::json!({ "interviewId": "int-99" })),
                     error: None,
                     host_calls: vec![
@@ -257,7 +257,7 @@ mod tests {
         // Retrieve full trace
         let fetched = trace_store.get_trace("018f3a2b-7c4d-7a8e-9012-3456789abcde").await.unwrap().expect("trace should exist");
         assert_eq!(fetched.command_id, trace.command_id);
-        assert_eq!(fetched.operation_name, "createInterview");
+        assert_eq!(fetched.operation_name, "createOrder");
         assert_eq!(fetched.steps.len(), 1);
         assert_eq!(fetched.steps[0].host_calls.len(), 2);
         assert_eq!(fetched.steps[0].host_calls[0].call_type, "db:query");
