@@ -52,12 +52,21 @@ export class CheckoutCell extends Fluxcell {
 }
 ```
 
-### Host Key Storage Format
-Step results are persisted in the host key-value store with the format:
+### Host Key Storage Format & Lifecycle
+Step results are persisted in the host key-value store (`internal_storage`) with the format:
 ```
 chk:<command_uuidv7>:<step_name>
 ```
-With a configurable time-to-live (default: 86,400 seconds / 24 hours).
+With a configurable time-to-live (default: **86,400 seconds / 24 hours**).
+
+#### Incomplete Execution & Retry Re-Entry
+When a multi-step mutation fails midway (e.g., Step 1 succeeds, Step 2 succeeds, but Step 3 fails or times out):
+1. **Preserved Intermediate State**: The checkpoint keys for Steps 1 and 2 are **retained in storage**. They are *not* discarded or rolled back upon handler failure.
+2. **Exponential Backoff NACK**: The chassis emits a `NACK` with exponential backoff delay back to the broker.
+3. **Fast Re-Entry (< 50µs)**: When the broker redelivers the event, the fluxcell re-executes with the same `command_id`. As execution hits Step 1 and Step 2, `ctx.step` detects the existing cached outputs, skips execution, and returns the cached JSON in **under 50 microseconds**. Execution resumes directly at Step 3 without repeating prior external side-effects.
+
+#### Why You Cannot Side-Step This With Multiple Queues
+In enterprise workflows, downstream database updates are often **causally dependent on external API outputs** (e.g. recording an order in PostgreSQL requires the Stripe transaction ID returned by the payment step). Because internal state transitions depend on external API outputs, decoupling them into independent fire-and-forget queue listeners causes severe partial-state hazards if the external call fails. `ctx.step` provides an ordered, dependent pipeline inside a single unit of execution with automatic memoization across retries.
 
 ---
 
@@ -97,6 +106,21 @@ backoff_factor = 2.0
 jitter = true
 dlq_topic_prefix = "dlq."
 ```
+
+### DLQ Envelope & Checkpoint Eviction
+When an event exhausts its retries (`msg.delivery_attempt >= max_retries`) or if the fluxcell explicitly returns `event_verdict::dead_letter`, the chassis formats a standardized diagnostic envelope:
+```json
+{
+  "messageId": "0191b2c4-8840-7ac3-...",
+  "originalTopic": "orders.checkout",
+  "payload": { ... },
+  "deliveryAttempts": 3,
+  "reason": "Fluxcell 'checkout-cell' failed: Stripe API rate limit exceeded",
+  "failedAt": "2026-09-23T19:20:00Z"
+}
+```
+* **Primary Stream Unblocking**: The dead-lettered message is published to `dlq.<topic>` and the original message is acknowledged (`ACK`) off the primary stream, preventing head-of-line blocking.
+* **Storage Eviction**: Any intermediate checkpoints recorded during prior failed attempts naturally expire after their 24-hour TTL in `internal_storage`, leaving zero orphaned disk state.
 
 ### Circuit Breakers
 If a downstream dependency (such as PostgreSQL) fails consistently:

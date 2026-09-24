@@ -116,7 +116,7 @@ SpectraFlux manages database schemas using standard `dbmate`-compatible SQL migr
 * **Automatic Version Tracking:** When `auto_migrate = true`, the chassis executes pending migrations against the target database during boot, recording versions in the standard `schema_migrations` table.
 
 ### Initial Authorization Schema
-The baseline migration [`db/migrations/20260919000001_create_auth_user_roles.sql`](file:///Users/bmo/code/SpectraFlux/db/migrations/20260919000001_create_auth_user_roles.sql) establishes:
+The baseline migration [`db/migrations/20260919000001_create_auth_user_roles.sql`](../db/migrations/20260919000001_create_auth_user_roles.sql) establishes:
 
 ```sql
 CREATE TABLE IF NOT EXISTS auth_user_roles (

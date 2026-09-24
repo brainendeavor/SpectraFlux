@@ -1,5 +1,7 @@
+# SpectraFlux
+
 <p align="center">
-  <img src="assets/spectraflux_logo.svg" alt="SpectraFlux Logo" width="260" />
+  <img src="assets/spectraflux_logo.svg" alt="SpectraFlux Logo" width="220" />
 </p>
 
 <p align="center">
@@ -11,6 +13,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-2024%20edition-orange.svg" alt="Rust Edition" /></a>
   <a href="https://bytecodealliance.org/"><img src="https://img.shields.io/badge/wasm-wasmtime%20engine-black.svg" alt="Wasmtime" /></a>
+  <a href="https://github.com/brainendeavor/SpectraGQL"><img src="https://img.shields.io/badge/gateway-SpectraGQL-00F0FF.svg" alt="SpectraGQL Companion" /></a>
+  <img src="https://img.shields.io/badge/tests-100%2B%20passed-brightgreen.svg" alt="Test Status" />
 </p>
 
 ---
@@ -271,9 +275,67 @@ cargo test --workspace
 # Build the chassis binary
 cargo build --package spectra-flux --release
 
+# Run embedded dev server with hot reload
+cargo run --package spectra-flux --bin dev
+
 # Build & test TypeScript SDK and Seed
 cd seeds/typescript
 bun run build
 bun test
 ```
+
+---
+
+## 10. Dynamic Fluxcell Deployment & Staging
+
+SpectraFlux runtime containers adhere to the **Zero-Compiler Container Invariant (< 25 MB)**—they do not bundle `rustc`, `cargo`, or `git`. WebAssembly fluxcells are compiled in external CI/CD pipelines and deployed dynamically at runtime:
+
+### Rapid Local Development (`--dev-upload`)
+```bash
+# Compile and stage a WebAssembly cell directly into the local running chassis
+fluxcell deploy --dev-upload ./target/wasm32-wasip1/release/my_cell.wasm --mount /api/orders --activate
+```
+
+### Production Remote Artifact Deployment
+Deploy via HTTPS artifact URLs with SHA-256 cryptographic verification:
+```bash
+fluxcell deploy \
+  --url https://github.com/my-org/cells/releases/download/v1.0.0/order_cell.wasm \
+  --sha256 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945 \
+  --mount /api/v1/orders
+```
+
+---
+
+## 11. Decoupled Storage Architecture
+
+SpectraFlux decouples operational chassis state from guest application state to prevent memory starvation, cache collisions, and operational coupling:
+
+* **`internal-storage`**: Reserved strictly for chassis framework state (Saga step checkpoints `ctx.step`, magic-link OTP tokens, session cache, and domain traces). Defaults to `kevy://embedded`.
+* **`fluxcell-storage`**: Dedicated exclusively to guest fluxcell application state, KV operations (`kv_store`), and Redis protocol commands (`host_redis`). Defaults to `kevy:///data/fluxcell-storage.kevy` with automatic local dev fallback to `./data/` or external Redis/Valkey clusters.
+
+```toml
+[internal-storage]
+url = "kevy://embedded"
+
+[fluxcell-storage]
+url = "kevy:///data/fluxcell-storage.kevy"
+# Or external Redis/Valkey cluster:
+# url = "redis://redis.internal:6379"
+```
+
+---
+
+## 12. Companion Ecosystem
+
+SpectraFlux is designed as the downstream execution chassis in the **Spectra High-Velocity Event-Driven Architecture**:
+
+* **[SpectraGQL](https://github.com/brainendeavor/SpectraGQL)**: Ultra-high-performance wire-speed API gateway built on Cloudflare's Pingora engine. Terminates GraphQL mutations at the edge, issues sub-millisecond UUIDv7/HLC command receipts, and dispatches events into NATS/Kafka/Redis Streams.
+* **[SpectraFlux](https://github.com/brainendeavor/SpectraFlux)**: Downstream WebAssembly execution chassis executing business domain models, Saga steps, and projections with hardware memory isolation.
+
+---
+
+## 13. License & Contributing
+
+SpectraFlux is open-source software licensed under the [MIT License](LICENSE). Contributions, bug reports, and pull requests are warmly welcomed.
 

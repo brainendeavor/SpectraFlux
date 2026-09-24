@@ -220,7 +220,7 @@ registerFluxcell(new ProjectWorkerCell());
 SpectraFlux adheres strictly to the **"Postgres or Bust"** relational standard. Relational role and user permissions are stored centrally in PostgreSQL, managed via embedded compile-time migrations.
 
 ### Baseline Schema (`auth_user_roles`)
-The baseline migration [`db/migrations/20260919000001_create_auth_user_roles.sql`](file:///Users/bmo/code/SpectraFlux/db/migrations/20260919000001_create_auth_user_roles.sql) establishes:
+The baseline migration [`db/migrations/20260919000001_create_auth_user_roles.sql`](../db/migrations/20260919000001_create_auth_user_roles.sql) establishes:
 
 ```sql
 CREATE TABLE IF NOT EXISTS auth_user_roles (
